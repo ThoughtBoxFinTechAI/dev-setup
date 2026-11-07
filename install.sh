@@ -799,7 +799,7 @@ ensure_standards() {
         say "Updating claude-standards"
         if [ "$DRY" = 1 ]; then note "[dry run] would update $d (git pull --ff-only)"; ok "dry run"; return; fi
         # BatchMode: an SSH address must fail, not stop at a host-key or passphrase prompt.
-        if (cd "$d" && GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=15" with_timeout 180 git pull --ff-only -q); then
+        if (cd "$d" && GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=15" with_timeout 180 git -c advice.diverging=false pull --ff-only -q); then
           note "claude-standards is up to date."; ok "updated"
         else
           warn "Couldn't update claude-standards (the message above says why). Using the copy you have."

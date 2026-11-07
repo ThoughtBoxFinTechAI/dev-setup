@@ -37,10 +37,14 @@ or reinstall what is broken, clean up old GitHub sign-ins, and explain failures 
 
 ## Tests and results
 
-22 Alpha cases (`SETUP-001`…`SETUP-022`): **19 pass, 0 fail, 3 not run** — see
+31 Alpha cases (`SETUP-001`…`SETUP-031`): **28 pass, 0 fail, 3 not run** — see
 `documents/v0.1.0/alpha/v0.1.0 - Alpha Test Cases (Safe reinstall and clear errors).md`.
-Tested on Windows 11 and Linux (WSL) in throwaway homes with fake old settings.
-**Not run:** macOS, `shellcheck`, Windows prompts in a real terminal.
+Tested on Windows 11 (PowerShell 5.1 and 7.4) and Linux (WSL) in throwaway homes with fake
+old settings, including a home folder with spaces and non-English letters, a wrong
+checksum, a failed download, a run killed halfway, and a claude-standards copy that has
+moved on from GitHub.
+**Not run:** macOS, `shellcheck`, Windows prompts in a real terminal, a real Git
+Credential Manager, the browser sign-in.
 
 ## Bugs fixed
 
@@ -48,7 +52,12 @@ Tested on Windows 11 and Linux (WSL) in throwaway homes with fake old settings.
 - Windows: git used an old saved github.com sign-in instead of the Gita profile.
 - Windows: the saved-login check failed when the console used UTF-8 (PowerShell added a
   byte-order mark to text sent to git).
-- A failed run could report success (exit code 0).
+- A failed run could report success (exit code 0). `powershell -File install.ps1` now
+  exits 1; under `irm | iex` the window stays open and `$LASTEXITCODE` is 1.
+- Credential Manager entries listed without the `LegacyGeneric:target=` prefix were missed;
+  entries are now matched by name, so translated cmdkey labels don't matter.
+- A temp folder was left behind when a run was killed; the next install clears old ones.
+- A claude-standards copy that couldn't be updated printed a page of git hints.
 - An SSH `git pull` of claude-standards could hang waiting for a password.
 
 ## Notes for users

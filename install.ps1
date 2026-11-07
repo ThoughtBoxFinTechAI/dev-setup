@@ -272,6 +272,10 @@ function Install-ThoughtBoxDevSetup {
   }
 
   function Install-Gita {
+    # A run that was killed can't reach its "finally"; clear what earlier runs left.
+    Get-ChildItem ([IO.Path]::GetTempPath()) -Directory -Filter 'tb-gita-*' -ErrorAction SilentlyContinue |
+      Where-Object { $_.LastWriteTime -lt (Get-Date).AddHours(-1) } |
+      Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     $work = Join-Path ([IO.Path]::GetTempPath()) ('tb-gita-' + [guid]::NewGuid())
     New-Item -ItemType Directory -Path $work | Out-Null
     try {
@@ -409,9 +413,12 @@ function Install-ThoughtBoxDevSetup {
       & $add "Saved github.com logins in: $h (erased with `"git credential reject`")" 'reject' ''
     }
     # Git Credential Manager keeps one entry per account; a reject only reaches the default one.
+    # Matched on the entry name, not cmdkey's labels, which are translated on non-English Windows.
     $cmd = Capture { cmdkey /list }
+    $seen = @{}
     foreach ($line in ($cmd.Out -split "`n")) {
-      if ($line -match 'target=(git:https://([^@/\s]+@)?github\.com\S*)') {
+      if ($line -match '(git:https://([^@/\s]+@)?github\.com(/\S*)?)\s*$' -and -not $seen[$Matches[1]]) {
+        $seen[$Matches[1]] = $true
         & $add "Windows Credential Manager entry $($Matches[1])" 'cmdkey' $Matches[1]
       }
     }
@@ -502,7 +509,7 @@ function Install-ThoughtBoxDevSetup {
           $r = Capture { cmdkey "/delete:LegacyGeneric:target=$($i.Arg)" }
           if ($r.Code -ne 0) { $r = Capture { cmdkey "/delete:$($i.Arg)" } }
           # Already gone (erased by the reject above) counts as done.
-          if ($r.Code -eq 0 -or -not ((Capture { cmdkey /list }).Out -match [regex]::Escape("target=$($i.Arg)"))) { $n++ }
+          if ($r.Code -eq 0 -or -not ((Capture { cmdkey /list }).Out -match ([regex]::Escape($i.Arg) + '\s*(\r?\n|$)'))) { $n++ }
           else { Warn "Couldn't remove the Credential Manager entry $($i.Arg)." }
         }
         'unset' {
@@ -646,7 +653,7 @@ function Install-ThoughtBoxDevSetup {
         if ($Dry) { Note "[dry run] would update $d (git pull --ff-only)"; return 'dry run' }
         # BatchMode: an SSH address must fail, not stop at a host-key or passphrase prompt.
         $oldSsh = $env:GIT_SSH_COMMAND; $env:GIT_SSH_COMMAND = 'ssh -o BatchMode=yes -o ConnectTimeout=15'
-        try { $code = Native { git -C $d -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60 pull --ff-only -q } }
+        try { $code = Native { git -C $d -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60 -c advice.diverging=false pull --ff-only -q } }
         finally { $env:GIT_SSH_COMMAND = $oldSsh }
         if ($code -eq 0) { Note 'claude-standards is up to date.'; return 'updated' }
         Warn "Couldn't update claude-standards (the message above says why). Using the copy you have."
@@ -816,8 +823,10 @@ function Install-ThoughtBoxDevSetup {
   Show-Summary
   Write-Host ''
   if ($failed) {
-    # No "exit": under "irm | iex" it would close the developer's terminal.
+    # No "exit" here: under "irm | iex" it would close the developer's terminal.
+    # The script-level code below exits 1 only when this runs as a .ps1 file.
     $global:LASTEXITCODE = 1
+    $script:TbSetupFailed = $true
     Note 'Fix the problem above and run the same command again. Finished steps are skipped.'
   } else {
     if ($Dry) { Say 'Dry run finished. Nothing was changed.' }
@@ -835,4 +844,8 @@ function Install-ThoughtBoxDevSetup {
   }
 }
 
+$script:TbSetupFailed = $false
 Install-ThoughtBoxDevSetup
+# "powershell -File install.ps1" reports only an explicit exit code, so a failed run must
+# exit 1 there. Under "irm | iex" there is no script path and no exit (see above).
+if ($script:TbSetupFailed -and $MyInvocation.MyCommand.Path) { exit 1 }
