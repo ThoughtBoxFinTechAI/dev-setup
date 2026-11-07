@@ -19,10 +19,10 @@ main() {
   set -euo pipefail
 
   # ---- Pinned versions. Update with every Gita release (see README). ----
-  local GITA_REPO="tbaiadmin/gita"
-  local GITA_VERSION="0.1.0"
-  local GITA_SHA256_MACOS=""   # SHA-256 of gita-macos.zip
-  local GITA_SHA256_LINUX=""   # SHA-256 of gita-linux-x64.tar.gz
+  local GITA_REPO="naseebnaushad/gita"
+  local GITA_VERSION="1.0.2"
+  local GITA_SHA256_MACOS="49b6a17a0920e66ccadc2a26b7caa241f7ce0ecdf28cd8d9f8f91b077e6b01d7"   # SHA-256 of gita-macos.zip
+  local GITA_SHA256_LINUX="f7736ddc106d0293b1feaeb3494c0ba3645b9ebec5b0ef2cfc1cc0c501122cdc"   # SHA-256 of gita-linux-x64.tar.gz
 
   local STANDARDS_URL="https://github.com/ThoughtBoxFinTechAI/claude-standards.git"
   local STANDARDS_DIR="$HOME/claude-standards"
