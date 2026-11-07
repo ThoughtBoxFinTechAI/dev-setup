@@ -1,0 +1,348 @@
+#!/usr/bin/env bash
+# ThoughtBox developer setup for macOS and Linux.
+#
+#   curl -fsSL https://raw.githubusercontent.com/ThoughtBoxFinTechAI/dev-setup/main/install.sh | bash
+#
+# Installs Git, GitHub CLI, Claude Code and Gita, sets up your two GitHub
+# accounts (@thoughtbox.io and @thoughtbox.one), clones claude-standards and
+# runs its setup. Safe to run again: steps that are already done are skipped.
+#
+# Optional environment variables (set them before running, e.g. TB_DRY_RUN=1 bash):
+#   TB_NAME, TB_EMAIL_IO, TB_EMAIL_ONE  answers to the questions, to skip them
+#   TB_DRY_RUN=1        print what would change, change nothing
+#   TB_GITA_ARCHIVE=<path>  install Gita from a local archive (testing, no checksum)
+#   TB_SKIP_SIGNIN=1    don't sign in to GitHub (testing)
+#   TB_SKIP_STANDARDS=1 skip claude-standards and the Claude Code setup (testing)
+
+# Everything is inside main, so a half-downloaded script runs nothing.
+main() {
+  set -euo pipefail
+
+  # ---- Pinned versions. Update with every Gita release (see README). ----
+  local GITA_REPO="tbaiadmin/gita"
+  local GITA_VERSION="0.1.0"
+  local GITA_SHA256_MACOS=""   # SHA-256 of gita-macos.zip
+  local GITA_SHA256_LINUX=""   # SHA-256 of gita-linux-x64.tar.gz
+
+  local STANDARDS_URL="https://github.com/ThoughtBoxFinTechAI/claude-standards.git"
+  local STANDARDS_DIR="$HOME/claude-standards"
+  local GITA_HOME="$HOME/.gita"
+  local GITA_CLI="$GITA_HOME/bin/gita"
+  local LABEL_IO="ThoughtBox"
+  local LABEL_ONE="ThoughtBox AI"
+  local DRY="${TB_DRY_RUN:-0}"
+
+  export PATH="$GITA_HOME/bin:$HOME/.local/bin:$PATH"
+
+  # Questions and sign-in read from the terminal, not from the piped script.
+  local TTY=/dev/tty
+  if ! { : <"$TTY"; } 2>/dev/null; then TTY=/dev/null; fi
+
+  local os asset sha app_dir cli_dir
+  case "$(uname -s)" in
+    Darwin)
+      os=macos; asset=gita-macos.zip; sha=$GITA_SHA256_MACOS
+      app_dir="$HOME/Applications/gita.app"; cli_dir="$app_dir/Contents/Resources/cli" ;;
+    Linux)
+      [ "$(uname -m)" = x86_64 ] || fail "Gita is only built for x86_64 Linux (this is $(uname -m))."
+      os=linux; asset=gita-linux-x64.tar.gz; sha=$GITA_SHA256_LINUX
+      app_dir="$HOME/.local/share/gita"; cli_dir="$app_dir/cli" ;;
+    *) fail "Unsupported system $(uname -s). On Windows, use install.ps1." ;;
+  esac
+
+  # ---- 1. Prerequisites ----
+  say "Checking prerequisites"
+  install_packages
+
+  if has claude; then
+    note "Claude Code is installed."
+  else
+    say "Installing Claude Code"
+    change "install Claude Code (official installer from claude.ai)" \
+      bash -c 'curl -fsSL https://claude.ai/install.sh | bash'
+  fi
+
+  # ---- 2. Gita ----
+  local installed=""
+  [ -x "$GITA_CLI" ] && installed=$("$GITA_CLI" --version 2>/dev/null || true)
+  if [ "$installed" = "gita $GITA_VERSION" ] && [ -z "${TB_GITA_ARCHIVE:-}" ]; then
+    note "Gita $GITA_VERSION is installed."
+  else
+    say "Installing Gita $GITA_VERSION"
+    if [ "$DRY" = 1 ]; then
+      note "[dry run] would download and install Gita into $app_dir"
+    else
+      install_gita
+    fi
+  fi
+  add_to_path "$GITA_HOME/bin"
+
+  # ---- 3. Your accounts ----
+  say "Your GitHub accounts"
+  local default_name name email_io email_one id_io id_one
+  default_name=$(git config --global user.name 2>/dev/null || true)
+  name=$(ask "Your full name (shown on commits)" "$default_name" "${TB_NAME:-}")
+  [ -n "$name" ] || fail "A name is needed."
+  email_io=$(ask_email "Your @thoughtbox.io email (projects in thoughtboxhub)" thoughtbox.io "${TB_EMAIL_IO:-}")
+  email_one=$(ask_email "Your @thoughtbox.one email (projects in ThoughtBoxFinTechAI)" thoughtbox.one "${TB_EMAIL_ONE:-}")
+
+  id_io=$(ensure_profile "$name" "$email_io" "$LABEL_IO")
+  id_one=$(ensure_profile "$name" "$email_one" "$LABEL_ONE")
+
+  # The AI account first: claude-standards lives in its organization.
+  ensure_signin "$id_one" "$email_one"
+
+  # ---- 4. claude-standards and the company files ----
+  if [ "${TB_SKIP_STANDARDS:-0}" = 1 ]; then
+    warn "Skipping claude-standards."
+  else
+    if [ -d "$STANDARDS_DIR/.git" ]; then
+      note "claude-standards is already in $STANDARDS_DIR."
+    else
+      say "Downloading claude-standards"
+      change "clone claude-standards into $STANDARDS_DIR" \
+        "$GITA_CLI" clone "$STANDARDS_URL" "$STANDARDS_DIR" --profile "$id_one"
+    fi
+    say "Telling Gita which organization uses which account"
+    change "import gita/thoughtbox.json" \
+      "$GITA_CLI" company import "$STANDARDS_DIR/gita/thoughtbox.json" --profile "$id_io"
+    change "import gita/thoughtbox-ai.json" \
+      "$GITA_CLI" company import "$STANDARDS_DIR/gita/thoughtbox-ai.json" --profile "$id_one"
+  fi
+
+  ensure_signin "$id_io" "$email_io"
+
+  # ---- 5. Claude Code ----
+  if [ "${TB_SKIP_STANDARDS:-0}" != 1 ]; then
+    say "Setting up Claude Code with the company standards"
+    change "run the claude-standards setup" bash "$STANDARDS_DIR/setup.sh"
+  fi
+  if [ "${TB_SKIP_STANDARDS:-0}" = 1 ]; then
+    :
+  elif has claude; then
+    change "connect Gita to Claude Code" "$GITA_CLI" mcp add-to-claude
+  else
+    warn 'Claude Code is not on PATH yet, so Gita was not connected to it. Run "gita mcp add-to-claude" later.'
+  fi
+
+  # ---- 6. Check ----
+  say "Checking the setup"
+  [ "$DRY" = 1 ] || "$GITA_CLI" doctor || true
+
+  echo
+  say "Done."
+  note "Next:"
+  note "  1. Open a new terminal (so PATH changes apply)."
+  note '  2. Run "claude" and sign in with your company Claude Teams seat.'
+  note '  3. Clone projects with "gita clone <address>", so each uses the right account.'
+}
+
+say()  { printf '\033[36m==> %s\033[0m\n' "$*" >&2; }
+note() { printf '    %s\n' "$*" >&2; }
+warn() { printf '\033[33m    ! %s\033[0m\n' "$*" >&2; }
+fail() { printf '\033[31mSetup stopped: %s\033[0m\n' "$*" >&2; exit 1; }
+has()  { command -v "$1" >/dev/null 2>&1; }
+
+# Runs a command that changes something, or only prints it in a dry run.
+change() {
+  local what=$1; shift
+  if [ "$DRY" = 1 ]; then note "[dry run] would $what"; return 0; fi
+  "$@" <"$TTY" || fail "$what failed."
+}
+
+ask() {  # prompt default preset
+  local answer
+  if [ -n "$3" ]; then printf '%s' "$3"; return; fi
+  if [ -n "$2" ]; then printf '%s [%s]: ' "$1" "$2" >&2; else printf '%s: ' "$1" >&2; fi
+  IFS= read -r answer <"$TTY" || true
+  printf '%s' "${answer:-$2}"
+}
+
+ask_email() {  # prompt domain preset
+  local email
+  while :; do
+    email=$(ask "$1" "" "$3" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+    case "$email" in
+      *@*@*) ;;
+      ?*@"$2") printf '%s' "$email"; return ;;
+    esac
+    [ -z "$3" ] || fail "$email is not an @$2 address."
+    [ "$TTY" != /dev/null ] || fail "No terminal to ask for your @$2 email. Set TB_EMAIL_IO and TB_EMAIL_ONE."
+    warn "Please enter your @$2 address."
+  done
+}
+
+sudo_run() {
+  if [ "$(id -u)" = 0 ]; then "$@"
+  elif [ "$TTY" = /dev/null ]; then sudo -n "$@"   # no terminal to ask for a password
+  else sudo "$@"; fi
+}
+
+install_packages() {
+  if [ "$os" = macos ]; then
+    has git || fail 'Git is missing. Run "xcode-select --install", wait for it to finish, then run this again.'
+    note "Git is installed."
+    if has gh; then
+      note "GitHub CLI is installed."
+    elif has brew; then
+      say "Installing GitHub CLI"
+      change "install GitHub CLI with Homebrew" brew install gh
+    else
+      warn "Homebrew isn't installed, so GitHub CLI was skipped. Get it from https://cli.github.com if you need it."
+    fi
+    return
+  fi
+
+  # Linux. secret-tool: Gita keeps GitHub tokens in the system keyring.
+  local need=() pm="" p
+  has git || need+=(git)
+  has curl || need+=(curl)
+  has secret-tool || need+=(secret-tool)
+  if has apt-get; then pm=apt; elif has dnf; then pm=dnf; elif has pacman; then pm=pacman; fi
+
+  if [ ${#need[@]} -gt 0 ]; then
+    [ -n "$pm" ] || fail "Please install ${need[*]} with your package manager, then run this again."
+    local pkgs=()
+    for p in "${need[@]}"; do pkgs+=("$(pkg_name "$pm" "$p")"); done
+    say "Installing ${pkgs[*]} (may ask for your password)"
+    pkg_install "$pm" "${pkgs[@]}" || fail "Installing ${pkgs[*]} failed."
+  else
+    note "Git, curl and secret-tool are installed."
+  fi
+
+  if has gh; then
+    note "GitHub CLI is installed."
+  elif [ -n "$pm" ] && say "Installing GitHub CLI" && pkg_install "$pm" "$(pkg_name "$pm" gh)"; then
+    :
+  else
+    warn "GitHub CLI wasn't installed. Get it from https://cli.github.com if you need it."
+  fi
+}
+
+pkg_name() {  # package-manager tool
+  case "$1:$2" in
+    apt:secret-tool) echo libsecret-tools ;;
+    dnf:secret-tool | pacman:secret-tool) echo libsecret ;;
+    pacman:gh) echo github-cli ;;
+    *) echo "$2" ;;
+  esac
+}
+
+pkg_install() {  # package-manager packages...
+  local pm=$1; shift
+  if [ "$DRY" = 1 ]; then note "[dry run] would install $* with $pm"; return 0; fi
+  case $pm in
+    apt) sudo_run apt-get update -qq <"$TTY" && sudo_run apt-get install -y -qq "$@" <"$TTY" ;;
+    dnf) sudo_run dnf install -y "$@" <"$TTY" ;;
+    pacman) sudo_run pacman -S --needed --noconfirm "$@" <"$TTY" ;;
+  esac
+}
+
+sha256_of() {
+  if has sha256sum; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi
+}
+
+install_gita() {
+  local work file url actual
+  work=$(mktemp -d)
+  # shellcheck disable=SC2064
+  trap "rm -rf '$work'" RETURN
+  file="$work/$asset"
+  if [ -n "${TB_GITA_ARCHIVE:-}" ]; then
+    warn "Using the local file $TB_GITA_ARCHIVE (no checksum check)."
+    cp "$TB_GITA_ARCHIVE" "$file"
+  else
+    [ -n "$sha" ] || fail "Gita $GITA_VERSION has no pinned checksum in this script yet. Ask an admin."
+    url="https://github.com/$GITA_REPO/releases/download/v$GITA_VERSION/$asset"
+    note "Downloading $url"
+    curl -fsSL "$url" -o "$file" || fail "Couldn't download Gita."
+    actual=$(sha256_of "$file")
+    [ "$actual" = "$sha" ] ||
+      fail "The Gita download doesn't match its pinned checksum (got $actual). Nothing was installed. Tell an admin."
+    note "Checksum OK."
+  fi
+
+  mkdir -p "$work/app"
+  if [ "$os" = macos ]; then
+    ditto -x -k "$file" "$work/app"
+    [ -x "$work/app/gita.app/Contents/Resources/cli/bin/gita" ] || fail "The Gita download has no gita.app."
+    mkdir -p "$(dirname "$app_dir")"
+    rm -rf "$app_dir"
+    mv "$work/app/gita.app" "$app_dir"
+  else
+    tar -xzf "$file" -C "$work/app"
+    [ -x "$work/app/cli/bin/gita" ] || fail "The Gita download has no cli/bin/gita."
+    mkdir -p "$(dirname "$app_dir")"
+    rm -rf "$app_dir"
+    mv "$work/app" "$app_dir"
+    mkdir -p "$HOME/.local/share/applications"
+    cat >"$HOME/.local/share/applications/gita.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Gita
+Comment=Keep each project on the right GitHub account
+Exec=$app_dir/gita
+Terminal=false
+Categories=Development;
+EOF
+  fi
+
+  # Same layout the Gita app keeps: ~/.gita/bin and ~/.gita/lib. Git runs the
+  # credential helper from here, so this path must not change.
+  local d
+  for d in bin lib; do
+    [ -d "$cli_dir/$d" ] || continue
+    mkdir -p "$GITA_HOME/$d"
+    cp -R "$cli_dir/$d/." "$GITA_HOME/$d/"
+  done
+  chmod +x "$GITA_CLI"
+  note "Installed $("$GITA_CLI" --version)."
+}
+
+add_to_path() {
+  local dir=$1 rc line
+  # shellcheck disable=SC2016
+  line="export PATH=\"${dir/#$HOME/\$HOME}:\$PATH\""
+  # The default shell's file is created if needed; the other is used if present.
+  local main_rc="$HOME/.bashrc"
+  [ "$os" = macos ] && main_rc="$HOME/.zshrc"
+  for rc in "$HOME/.zshrc" "$HOME/.bashrc"; do
+    [ -f "$rc" ] || [ "$rc" = "$main_rc" ] || continue
+    grep -qF "$line" "$rc" 2>/dev/null && continue
+    if [ "$DRY" = 1 ]; then note "[dry run] would add $dir to PATH in $rc"; continue; fi
+    printf '\n# Added by ThoughtBox dev-setup\n%s\n' "$line" >>"$rc"
+  done
+}
+
+# Prints one "id<TAB>email<TAB>signedIn" line per Gita profile.
+list_profiles() {
+  [ -x "$GITA_CLI" ] || return 0
+  "$GITA_CLI" profiles --json | awk -F'"' '
+    $2 == "id"       { id = $4 }
+    $2 == "email"    { email = $4 }
+    $2 == "signedIn" { si = ($3 ~ /true/) ? "true" : "false"; print id "\t" email "\t" si }'
+}
+
+ensure_profile() {  # name email label -> prints id
+  local id out
+  id=$(list_profiles | awk -F'\t' -v e="$2" '$2 == e { print $1; exit }')
+  if [ -n "$id" ]; then note "Profile for $2 already exists."; printf '%s' "$id"; return; fi
+  if [ "$DRY" = 1 ]; then note "[dry run] would add the Gita profile \"$3\" for $2"; printf '<%s>' "$3"; return; fi
+  out=$("$GITA_CLI" profile add --name "$1" --email "$2" --label "$3" --json) ||
+    fail "Couldn't add the Gita profile for $2. $out"
+  note "Added the Gita profile \"$3\" for $2."
+  printf '%s' "$out" | awk -F'"' '$2 == "id" { print $4; exit }'
+}
+
+ensure_signin() {  # id email
+  if [ "${TB_SKIP_SIGNIN:-0}" = 1 ]; then warn "Skipping GitHub sign-in for $2."; return; fi
+  if list_profiles | awk -F'\t' -v i="$1" '$1 == i && $3 == "true" { f = 1 } END { exit !f }'; then
+    note "$2 is already signed in to GitHub."; return
+  fi
+  say "Sign in to GitHub with the account for $2"
+  note "A code is shown below. Enter it on github.com, signed in as the account for this email."
+  note "If the browser is signed in to your other account, sign out there first."
+  change "sign in $2 to GitHub" "$GITA_CLI" sign-in --profile "$1"
+}
+
+main "$@"
