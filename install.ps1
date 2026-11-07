@@ -19,10 +19,10 @@ function Install-ThoughtBoxDevSetup {
   Set-StrictMode -Version 2
 
   # ---- Pinned versions. Update with every Gita release (see README). ----
-  $GitaRepo    = 'tbaiadmin/gita'
-  $GitaVersion = '0.1.0'
+  $GitaRepo    = 'naseebnaushad/gita'
+  $GitaVersion = '1.0.2'
   $GitaAsset   = 'gita-windows-x64.zip'
-  $GitaSha256  = ''   # SHA-256 of $GitaAsset for $GitaVersion
+  $GitaSha256  = 'd73ba7b9a1e34498e32432b6e73eb3d9007bb1cab1b51cc292a351b0d7d4334d'   # SHA-256 of $GitaAsset for $GitaVersion
 
   $StandardsUrl = 'https://github.com/ThoughtBoxFinTechAI/claude-standards.git'
   $StandardsDir = Join-Path $HOME 'claude-standards'

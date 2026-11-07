@@ -22,7 +22,7 @@ it again any time; finished steps are skipped.
 |---|---|
 | Prerequisites | Git, GitHub CLI. Windows: winget. macOS: Xcode tools + Homebrew. Linux: apt, dnf or pacman (also `secret-tool`, where Gita keeps tokens). |
 | Claude Code | The official installer from claude.ai, if `claude` isn't installed. |
-| Gita | A pinned release of [Gita](https://github.com/tbaiadmin/gita), checked against a SHA-256 in the script before anything is installed. The app goes to `%LOCALAPPDATA%\Programs\Gita`, `~/Applications/gita.app` or `~/.local/share/gita`; the `gita` command to `~/.gita/bin` (added to PATH). |
+| Gita | A pinned release of [Gita](https://github.com/naseebnaushad/gita), checked against a SHA-256 in the script before anything is installed. The app goes to `%LOCALAPPDATA%\Programs\Gita`, `~/Applications/gita.app` or `~/.local/share/gita`; the `gita` command to `~/.gita/bin` (added to PATH). |
 | Accounts | Gita profiles `ThoughtBox` (@thoughtbox.io) and `ThoughtBox AI` (@thoughtbox.one), each signed in to GitHub. Existing profiles with those emails are reused. |
 | claude-standards | Cloned to `~/claude-standards` with the AI account, its Gita company files imported (`thoughtboxhub` → .io, `ThoughtBoxFinTechAI` → .one), then its setup run (rules, deny rules, company plugin). |
 | Finish | Gita is connected to Claude Code (`gita mcp add-to-claude`) and `gita doctor` checks everything. |
@@ -48,11 +48,11 @@ macOS/Linux: `curl -fsSL .../install.sh | TB_DRY_RUN=1 bash`.
 The installers only install the exact Gita version and checksums pinned at the top of
 each script. To move to a new release:
 
-1. Tag the release in `tbaiadmin/gita` (`vX.Y.Z`); CI builds the three downloads into a
+1. Tag the release in `naseebnaushad/gita` (`vX.Y.Z`); CI builds the three downloads into a
    draft release. Check it and publish it.
 2. Get the checksums:
    ```bash
-   gh release download vX.Y.Z --repo tbaiadmin/gita --dir /tmp/gita-vX.Y.Z
+   gh release download vX.Y.Z --repo naseebnaushad/gita --dir /tmp/gita-vX.Y.Z
    sha256sum /tmp/gita-vX.Y.Z/*
    ```
 3. Update `$GitaVersion` and `$GitaSha256` in `install.ps1`, and `GITA_VERSION`,
