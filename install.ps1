@@ -686,11 +686,14 @@ function Install-ThoughtBoxDevSetup {
       $login = Login-Of (Get-Profile $Ctx.IdOne)
       if (-not $login) { $login = 'unknown' }
       Warn "Couldn't download claude-standards. Likely causes:"
-      Note "  1. `"$LabelOne`" is signed in as @$login. It must be your $($Ctx.EmailOne) GitHub account,"
+      Note "  1. ThoughtBoxFinTechAI hasn't approved the Gita app yet (the most common cause). On"
+      Note '     github.com open Settings > Applications > Authorized OAuth Apps > Gita, click'
+      Note '     "Request" next to ThoughtBoxFinTechAI, and ask an org owner to approve it under'
+      Note '     Organization settings > Third-party access.'
+      Note "  2. `"$LabelOne`" is signed in as @$login. It must be your $($Ctx.EmailOne) GitHub account,"
       Note '     the one that is a member of ThoughtBoxFinTechAI.'
-      Note "  2. Your account hasn't been added to ThoughtBoxFinTechAI yet, or the organization"
-      Note "     hasn't approved Gita. Ask an admin."
-      Note '  3. No connection to github.com.'
+      Note "  3. Your account hasn't been added to ThoughtBoxFinTechAI yet. Ask an admin."
+      Note '  4. No connection to github.com.'
       if ($try -ne 1 -or -not $Interactive -or $env:TB_SKIP_SIGNIN -eq '1') { break }
       if (-not (Ask-YN "Sign `"$LabelOne`" in to GitHub again and retry?" $true)) { break }
       SignIn-Flow $Ctx.IdOne $Ctx.EmailOne $LabelOne $Ctx.IdIo

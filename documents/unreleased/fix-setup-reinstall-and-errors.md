@@ -62,6 +62,13 @@ Credential Manager, the browser sign-in.
 
 ## Notes for users
 
+- **If claude-standards can't be downloaded, the most common cause is that
+  ThoughtBoxFinTechAI hasn't approved the Gita app.** Request it on github.com
+  (Settings → Applications → Authorized OAuth Apps → Gita → Request) and an org owner
+  approves it (Organization settings → Third-party access). This was the real cause of
+  Thomas's failure; after approval the setup worked on Windows. The setup now lists this
+  cause first.
+
 - The setup can log you out of GitHub CLI. Run `gh auth login` afterwards with the right
   account.
 - New options: `TB_CLEAN=1` (remove old sign-ins without asking), `TB_LOG` (log path).

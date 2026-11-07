@@ -833,11 +833,14 @@ clone_standards() {
     load_profiles
     login=$(profile_get "$id_one" 4)
     warn "Couldn't download claude-standards. Likely causes:"
-    note "  1. \"$LABEL_ONE\" is signed in as @${login:-unknown}. It must be your $email_one GitHub account,"
+    note "  1. ThoughtBoxFinTechAI hasn't approved the Gita app yet (the most common cause). On"
+    note "     github.com open Settings > Applications > Authorized OAuth Apps > Gita, click"
+    note "     \"Request\" next to ThoughtBoxFinTechAI, and ask an org owner to approve it under"
+    note "     Organization settings > Third-party access."
+    note "  2. \"$LABEL_ONE\" is signed in as @${login:-unknown}. It must be your $email_one GitHub account,"
     note "     the one that is a member of ThoughtBoxFinTechAI."
-    note "  2. Your account hasn't been added to ThoughtBoxFinTechAI yet, or the organization"
-    note "     hasn't approved Gita. Ask an admin."
-    note "  3. No connection to github.com."
+    note "  3. Your account hasn't been added to ThoughtBoxFinTechAI yet. Ask an admin."
+    note "  4. No connection to github.com."
     [ "$try" = 1 ] && [ "$TTY" != /dev/null ] && [ "${TB_SKIP_SIGNIN:-0}" != 1 ] || break
     ask_yn "Sign \"$LABEL_ONE\" in to GitHub again and retry?" y || break
     signin_flow "$id_one" "$email_one" "$LABEL_ONE" "$id_io"

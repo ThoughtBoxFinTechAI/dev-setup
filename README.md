@@ -54,11 +54,17 @@ macOS/Linux: `curl -fsSL .../install.sh | TB_DRY_RUN=1 bash`.
   same command again; finished steps are skipped.
 - Every run writes a log to `~/.thoughtbox-setup.log`. Only you can read it, and no token is
   written to it. Send it when asking for help.
-- **"claude-standards couldn't be downloaded"**: the `ThoughtBox AI` profile must be signed
-  in as your @thoughtbox.one GitHub account, and that account must be a member of
-  ThoughtBoxFinTechAI. GitHub signs in whoever is logged in to github.com in your browser,
-  so sign out there first (or use a private window), then run
-  `gita sign-in --profile "ThoughtBox AI"` and the setup again.
+- **"claude-standards couldn't be downloaded"**: check these in order.
+  1. **ThoughtBoxFinTechAI must approve the Gita app** (the most common cause). Signed in to
+     github.com as your @thoughtbox.one account, open **Settings → Applications → Authorized
+     OAuth Apps → Gita** and click **Request** next to ThoughtBoxFinTechAI. An org owner
+     approves it under **Organization settings → Third-party access**. Then run the setup
+     again.
+  2. The `ThoughtBox AI` profile must be signed in as your @thoughtbox.one GitHub account.
+     GitHub signs in whoever is logged in to github.com in your browser, so sign out there
+     first (or use a private window), then run `gita sign-in --profile "ThoughtBox AI"` and
+     the setup again.
+  3. That account must be a member of ThoughtBoxFinTechAI. Ask an admin.
 - **macOS `Killed: 9`**: run the setup again; it reinstalls Gita.
 - If the clean-up signed out GitHub CLI, run `gh auth login` with the right account.
 - Not changed automatically; check them yourself if git still uses the wrong account:
