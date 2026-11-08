@@ -41,6 +41,9 @@ main() {
   local os asset sha app_dir cli_dir
   case "$(uname -s)" in
     Darwin)
+      # hw.optional.arm64, not uname -m, which says x86_64 under Rosetta.
+      [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ] ||
+        fail "Gita's gita command is only built for Apple silicon Macs (M1 or later); this Mac has an Intel processor."
       os=macos; asset=gita-macos.zip; sha=$GITA_SHA256_MACOS
       app_dir="$HOME/Applications/gita.app"; cli_dir="$app_dir/Contents/Resources/cli" ;;
     Linux)
@@ -64,7 +67,12 @@ main() {
 
   # ---- 2. Gita ----
   local installed=""
-  [ -x "$GITA_CLI" ] && installed=$("$GITA_CLI" --version 2>/dev/null || true)
+  [ -x "$GITA_CLI" ] && installed=$({ "$GITA_CLI" --version; } 2>/dev/null || true)
+  # The Mac app copies its own command over ~/.gita when it starts, so the
+  # copy inside gita.app has to run too (see fix_macos_cli_signature).
+  if [ "$os" = macos ] && ! { "$cli_dir/bin/gita" --version; } >/dev/null 2>&1; then
+    installed=""
+  fi
   if [ "$installed" = "gita $GITA_VERSION" ] && [ -z "${TB_GITA_ARCHIVE:-}" ]; then
     note "Gita $GITA_VERSION is installed."
   else
