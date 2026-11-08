@@ -63,7 +63,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Stops with a clear message
         run: |
-          if bash install.sh </dev/null 2>&1 | tee out.log; then exit 1; fi
+          if bash install.sh </dev/null >out.log 2>&1; then cat out.log; exit 1; fi
+          cat out.log
           grep -q "only built for Apple silicon" out.log
 
   windows:
