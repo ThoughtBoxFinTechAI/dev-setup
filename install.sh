@@ -123,7 +123,9 @@ main() {
   # ---- 5. Claude Code ----
   if [ "${TB_SKIP_STANDARDS:-0}" != 1 ]; then
     say "Setting up Claude Code with the company standards"
-    change "run the claude-standards setup" bash "$STANDARDS_DIR/setup.sh"
+    # No terminal input: it asks nothing, and "claude plugin" crashes when its
+    # input is /dev/tty (Bun on macOS: "EINVAL: invalid argument, kqueue").
+    TTY=/dev/null change "run the claude-standards setup" bash "$STANDARDS_DIR/setup.sh"
   fi
   if [ "${TB_SKIP_STANDARDS:-0}" = 1 ]; then
     :
