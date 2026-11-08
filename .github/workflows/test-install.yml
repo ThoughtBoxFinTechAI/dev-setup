@@ -1,0 +1,83 @@
+# Runs the installers on fresh machines, skipping only what needs a person
+# (GitHub sign-in) and the private claude-standards repo.
+name: Test installers
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TB_NAME: CI Test
+  TB_EMAIL_IO: ci@thoughtbox.io
+  TB_EMAIL_ONE: ci@thoughtbox.one
+  TB_SKIP_SIGNIN: '1'
+  TB_SKIP_STANDARDS: '1'
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: shellcheck install.sh
+
+  unix:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dry run changes nothing
+        run: |
+          TB_DRY_RUN=1 bash install.sh </dev/null
+          test ! -e "$HOME/.gita"
+      - name: Install (piped, like the one-liner)
+        run: cat install.sh | bash
+      - name: Gita works
+        run: |
+          "$HOME/.gita/bin/gita" --version
+          "$HOME/.gita/bin/gita" profiles --json | grep -q ci@thoughtbox.io
+          "$HOME/.gita/bin/gita" profiles --json | grep -q ci@thoughtbox.one
+      - name: macOS app is intact and matches ~/.gita
+        if: runner.os == 'macOS'
+        run: |
+          app="$HOME/Applications/gita.app"
+          codesign --verify --deep --strict "$app"
+          "$app/Contents/Resources/cli/bin/gita" --version
+          cmp "$app/Contents/Resources/cli/bin/gita" "$HOME/.gita/bin/gita"
+      - name: Second run skips finished steps
+        run: |
+          bash install.sh </dev/null 2>&1 | tee run2.log
+          grep -q "Gita .* is installed" run2.log
+          grep -q "Profile for ci@thoughtbox.io already exists" run2.log
+
+  macos-intel:
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stops with a clear message
+        run: |
+          if bash install.sh </dev/null >out.log 2>&1; then cat out.log; exit 1; fi
+          cat out.log
+          grep -q "only built for Apple silicon" out.log
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install
+        shell: pwsh
+        run: ./install.ps1
+      - name: Gita works
+        shell: pwsh
+        run: |
+          $gita = Get-Command gita -ErrorAction SilentlyContinue
+          if (-not $gita) { $gita = Get-ChildItem "$HOME\.gita\bin\gita.exe" }
+          & $gita --version
+          if ($LASTEXITCODE -ne 0) { throw "gita doesn't run" }

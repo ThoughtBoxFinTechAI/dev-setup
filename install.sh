@@ -41,6 +41,9 @@ main() {
   local os asset sha app_dir cli_dir
   case "$(uname -s)" in
     Darwin)
+      # hw.optional.arm64, not uname -m, which says x86_64 under Rosetta.
+      [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ] ||
+        fail "Gita's gita command is only built for Apple silicon Macs (M1 or later); this Mac has an Intel processor."
       os=macos; asset=gita-macos.zip; sha=$GITA_SHA256_MACOS
       app_dir="$HOME/Applications/gita.app"; cli_dir="$app_dir/Contents/Resources/cli" ;;
     Linux)
@@ -64,7 +67,12 @@ main() {
 
   # ---- 2. Gita ----
   local installed=""
-  [ -x "$GITA_CLI" ] && installed=$("$GITA_CLI" --version 2>/dev/null || true)
+  [ -x "$GITA_CLI" ] && installed=$({ "$GITA_CLI" --version; } 2>/dev/null || true)
+  # The Mac app copies its own command over ~/.gita when it starts, so the
+  # copy inside gita.app has to run too (see fix_macos_cli_signature).
+  if [ "$os" = macos ] && ! { "$cli_dir/bin/gita" --version; } >/dev/null 2>&1; then
+    installed=""
+  fi
   if [ "$installed" = "gita $GITA_VERSION" ] && [ -z "${TB_GITA_ARCHIVE:-}" ]; then
     note "Gita $GITA_VERSION is installed."
   else
@@ -115,7 +123,9 @@ main() {
   # ---- 5. Claude Code ----
   if [ "${TB_SKIP_STANDARDS:-0}" != 1 ]; then
     say "Setting up Claude Code with the company standards"
-    change "run the claude-standards setup" bash "$STANDARDS_DIR/setup.sh"
+    # No terminal input: it asks nothing, and "claude plugin" crashes when its
+    # input is /dev/tty (Bun on macOS: "EINVAL: invalid argument, kqueue").
+    TTY=/dev/null change "run the claude-standards setup" bash "$STANDARDS_DIR/setup.sh"
   fi
   if [ "${TB_SKIP_STANDARDS:-0}" = 1 ]; then
     :
@@ -269,6 +279,7 @@ install_gita() {
     mkdir -p "$(dirname "$app_dir")"
     rm -rf "$app_dir"
     mv "$work/app/gita.app" "$app_dir"
+    fix_macos_cli_signature
   else
     tar -xzf "$file" -C "$work/app"
     [ -x "$work/app/cli/bin/gita" ] || fail "The Gita download has no cli/bin/gita."
@@ -296,7 +307,42 @@ EOF
     cp -R "$cli_dir/$d/." "$GITA_HOME/$d/"
   done
   chmod +x "$GITA_CLI"
-  note "Installed $("$GITA_CLI" --version)."
+  local version
+  version=$("$GITA_CLI" --version 2>/dev/null) ||
+    fail "Gita was installed but its gita command won't run on this system. Tell an admin."
+  note "Installed $version."
+}
+
+# Gita 1.0.2's command is signed with the hardened runtime but without the
+# entitlement the Dart runtime needs to run its compiled code, so newer macOS
+# kills it on start ("Killed: 9"). If the bundled command won't run, sign it
+# again (ad hoc) with that entitlement. It is fixed inside gita.app, not just
+# in ~/.gita, because the app copies its command to ~/.gita every time it
+# starts. Does nothing once a Gita release ships a command that runs.
+fix_macos_cli_signature() {
+  local exe="$cli_dir/bin/gita" ent f
+  { "$exe" --version; } >/dev/null 2>&1 && return 0   # braces: no "Killed: 9" line
+  note "Re-signing the gita command so macOS lets it run."
+  ent="$work/cli.entitlements"
+  cat >"$ent" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+</dict>
+</plist>
+EOF
+  find "$cli_dir" -type f \( -perm -u+x -o -name '*.dylib' \) | while IFS= read -r f; do
+    codesign --force --sign - --options runtime --entitlements "$ent" "$f" 2>/dev/null ||
+      fail "Couldn't re-sign $f."
+  done
+  # Re-seal the app, since files inside it changed, keeping its own entitlements.
+  codesign --force --sign - --preserve-metadata=entitlements,flags "$app_dir" 2>/dev/null ||
+    fail "Couldn't re-sign $app_dir."
+  { "$exe" --version; } >/dev/null 2>&1 ||
+    fail "The gita command still won't run on this Mac after re-signing it. Tell an admin."
 }
 
 add_to_path() {
