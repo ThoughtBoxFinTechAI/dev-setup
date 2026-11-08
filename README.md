@@ -16,6 +16,9 @@ You'll be asked for your name, your **@thoughtbox.io** email and your **@thought
 email, and you'll sign in to GitHub twice: once per account. The rest is automatic. Run
 it again any time; finished steps are skipped.
 
+Macs need Apple silicon (M1 or later): the Gita command isn't built for Intel Macs yet.
+Linux needs x86_64.
+
 ## What it does
 
 | Step | Details |
