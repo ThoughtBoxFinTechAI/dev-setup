@@ -523,6 +523,13 @@ function Install-ThoughtBoxDevSetup {
     }
 
     # Claude Code entry. run_script is on by team decision (CR-0.1.0-02, D5).
+    # Gita installs Claude Code in its own process, so this session's PATH may not
+    # have it yet; its installer puts claude.exe in ~\.local\bin.
+    if (-not (Has 'claude')) {
+      Update-SessionPath
+      $localBin = Join-Path $HOME '.local\bin'
+      if (-not (Has 'claude') -and (Test-Path (Join-Path $localBin 'claude.exe'))) { $env:Path = "$env:Path;$localBin" }
+    }
     if (-not (Has 'claude')) {
       Warn 'Claude Code is not on PATH yet, so the bridge was not added to it. Run this setup again in a new terminal.'
       return

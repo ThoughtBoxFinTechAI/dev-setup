@@ -83,6 +83,11 @@ PowerShell 5.1, which inherited PowerShell 7's module path and couldn't find
 (PowerShell 7 only) and restores it afterwards. This affects anyone who starts the setup
 from PowerShell 7, not only CI.
 
+Also since that merge, Gita installs Claude Code in its own process, so the Figma step
+found no `claude` on the session's PATH and skipped adding `figma-bridge` ("Run this
+setup again in a new terminal"). It now re-reads PATH and also looks in `~\.local\bin`,
+where Claude Code's installer puts `claude.exe`.
+
 ## Notes for users / upgrade steps
 - Frontend developers: run the setup again and answer **yes**, or run it with `TB_FIGMA=1`.
   Then once: Figma desktop app → **Plugins → Development → Import plugin from manifest…**
