@@ -35,3 +35,15 @@ PR's CI.
 ## Notes for users
 
 Run the same one-line command again in a new PowerShell window.
+
+## Documents updated
+
+`documents/Lifecycle and process flows.md` now shows `main` as it is after PRs #6, #5 and
+#4: the `gita onboard` flow with Gita 1.1.1 and the two hotfix steps (Figure 3),
+`~/.local/bin/claude` in "what goes where" (Figure 6), two new troubleshooting branches
+(Figure 11), the timeline up to PR #8, and what is left (Figure 12, including bringing
+`main` into `develop`, which is 22 commits behind). All 12 diagrams render with
+mermaid-cli 11.4.2.
+
+The PR moved from `fix/windows-claude-path` (#7, closed) to `hotfix/0.2.1` (#8), because
+only a release or a hotfix goes into `main`.
