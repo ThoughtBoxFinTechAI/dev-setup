@@ -18,6 +18,8 @@
 #   TB_SKIP_STANDARDS=1 skip claude-standards and its setup (testing)
 #   TB_GITA_ZIP=<path>         install Gita from a local zip (testing, no checksum)
 #   TB_ONBOARDING_FILE=<path>  use a local onboarding file (testing, no checksum)
+#   TB_FIGMA=1 / TB_FIGMA=0  set up the Figma MCP Bridge for frontend work, or skip
+#                       it, without being asked (default: ask; no terminal = skip)
 #   TB_TEST_USER_PATH_FILE=<path>  read and write the user PATH in this file instead
 #                       of the registry (testing)
 #   TB_TEST_MACHINE_PATH=<value>   use this as the system PATH (testing, read only)
@@ -35,6 +37,12 @@ function Install-ThoughtBoxDevSetup {
   $GitaSha256 = '095a36bdac7c8fa914209a8300db3a55ee09e01cc52971a8293222a534e2e018'   # SHA-256 of $GitaAsset for $GitaVersion
   $OnboardingUrl = 'https://raw.githubusercontent.com/ThoughtBoxFinTechAI/dev-setup/main/thoughtbox-onboarding.json'
   $OnboardingSha256 = 'a723840dd6b09911fea6b1afa42cfe641c21deb161d0cb66e3e9e6bf1431a196'
+
+  # ---- Pinned Figma MCP Bridge (optional step). Update together (see README). ----
+  $FigmaVersion      = '0.0.25'
+  $FigmaNpmSha512    = 'e4d49e8aed1cea7e18f42222ae4e854901341c9824e4f12c3a63b85d6abd61bfa16fc3ac39e7dda596bcb83440f26233ebc47fc6f458390967f6d85ed9aedb8a'   # SHA-512 of the npm tarball
+  $FigmaPluginSha256 = 'bf50a9ce330193bceb916c0eeb7252ce72a696f92a3369528139b6a4376d8550'   # SHA-256 of the release zip
+  $FigmaDir          = Join-Path $HOME '.thoughtbox\figma-mcp-bridge'
 
   $GitaHome   = Join-Path $HOME '.gita'
   $GitaCli    = Join-Path $GitaHome 'bin\gita.exe'
@@ -369,6 +377,13 @@ function Install-ThoughtBoxDevSetup {
     if ($env:TB_SKIP_STANDARDS -eq '1') { $ga += '--skip-repos' }
     Write-Host ''
     $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    # Under PowerShell 7, PSModulePath lists PowerShell 7's own modules first. Gita runs
+    # Claude Code's installer in Windows PowerShell 5.1, which inherits that path, loads
+    # modules it can't use and then can't find Get-FileHash. Give Gita the machine path.
+    $oldModulePath = $env:PSModulePath
+    if ($PSVersionTable.PSEdition -eq 'Core') {
+      $env:PSModulePath = [Environment]::GetEnvironmentVariable('PSModulePath', 'Machine')
+    }
     try {
       if ($Interactive -and -not [Console]::IsOutputRedirected) {
         Note "(Gita's own output is shown in the console only, so it can ask you questions.)"
@@ -377,7 +392,161 @@ function Install-ThoughtBoxDevSetup {
         & $Gita @ga 2>&1 | ForEach-Object { Write-Host "$_" }
       }
       $S.Code = $LASTEXITCODE
-    } finally { $ErrorActionPreference = $old }
+    } finally { $ErrorActionPreference = $old; $env:PSModulePath = $oldModulePath }
+  }
+
+
+  # ------------------------------------------------------------ Figma (optional, see the README)
+
+  function Has([string]$Cmd) { [bool](Get-Command $Cmd -ErrorAction SilentlyContinue) }
+
+  # TB_FIGMA answers up front; otherwise ask. No console to ask in means no.
+  function Want-Figma {
+    if ($env:TB_FIGMA -eq '1') { return $true }
+    if ($env:TB_FIGMA -eq '0') { return $false }
+    if ($env:TB_FIGMA) { Warn "TB_FIGMA must be 1 or 0 (it is `"$env:TB_FIGMA`"), so the Figma step is skipped."; return $false }
+    if (-not $Interactive) { return $false }
+    $answer = "$(Read-Host 'Set up Figma for frontend work (Figma MCP Bridge)? [y/N]')".Trim().ToLowerInvariant()
+    return ($answer -eq 'y' -or $answer -eq 'yes')
+  }
+
+  # Runs a native command whose stderr is only noise. Windows PowerShell turns
+  # any stderr line into a terminating error under 'Stop', even with 2>$null.
+  function Invoke-Native([scriptblock]$Do) {
+    $old = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { & $Do 2>$null } finally { $ErrorActionPreference = $old }
+  }
+
+  function Get-NodeMajor {
+    if (-not (Has 'node')) { return 0 }
+    $v = "$(Invoke-Native { node --version })".Trim()
+    if ($v -match '^v(\d+)\.') { return [int]$Matches[1] }
+    return 0
+  }
+
+  # The bridge's command line points into this folder, so a running copy locks it.
+  function Get-BridgeProcesses {
+    @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
+      Where-Object { $_.CommandLine -and $_.CommandLine -like "*$FigmaDir*" })
+  }
+
+  function Install-FigmaFiles {
+    if (@(Get-BridgeProcesses).Count -gt 0) {
+      Fail 'The Figma bridge is running.' @('Close Claude Code (and any other AI tool using it), then run this again.')
+    }
+    $work = Join-Path $S.Tmp 'figma'
+    New-Item -ItemType Directory -Path $work -Force | Out-Null
+
+    # npm.cmd, not npm: npm.ps1 can be blocked by the execution policy.
+    Note "Downloading @gethopp/figma-mcp-bridge@$FigmaVersion from npm"
+    Invoke-Native { npm.cmd pack "@gethopp/figma-mcp-bridge@$FigmaVersion" --pack-destination $work --silent } | Out-Null
+    if ($LASTEXITCODE -ne 0) { Fail "Couldn't download the bridge server from npm." }
+    $tgz = @(Get-ChildItem $work -Filter '*.tgz')
+    if ($tgz.Count -ne 1) { Fail "npm didn't produce the bridge server package." }
+    $actual = (Get-FileHash -LiteralPath $tgz[0].FullName -Algorithm SHA512).Hash.ToLowerInvariant()
+    if ($actual -ne $FigmaNpmSha512) {
+      Fail "The bridge server download doesn't match its pinned checksum." @('Nothing was installed. Tell an admin.')
+    }
+
+    $zip = Join-Path $work 'plugin.zip'
+    $url = "https://github.com/gethopp/figma-mcp-bridge/releases/download/v$FigmaVersion/figma-mcp-bridge-v$FigmaVersion.zip"
+    Note "Downloading $url"
+    Get-WithRetry $url $zip 'the Figma plugin'
+    if ((Get-Sha256 $zip) -ne $FigmaPluginSha256) {
+      Fail "The Figma plugin download doesn't match its pinned checksum." @('Nothing was installed. Tell an admin.')
+    }
+    Note 'Checksums OK.'
+
+    # Build the new copy next to the downloads, then swap it in.
+    $stage = Join-Path $work 'bridge'
+    $server = Join-Path $stage 'server'
+    New-Item -ItemType Directory -Path $server -Force | Out-Null
+    Invoke-Native { npm.cmd install --prefix $server $tgz[0].FullName --ignore-scripts --omit=dev --no-audit --no-fund --silent } | Out-Null
+    if ($LASTEXITCODE -ne 0) { Fail "Couldn't install the bridge server's packages with npm." }
+    Expand-Archive -Path $zip -DestinationPath (Join-Path $work 'zip')
+    $plugin = Join-Path $work 'zip\plugin'
+    if (-not (Test-Path (Join-Path $plugin 'manifest.json'))) { Fail 'The Figma plugin download has no plugin\manifest.json.' }
+    Move-Item $plugin (Join-Path $stage 'plugin')
+    Set-Content -Path (Join-Path $stage 'version') -Value $FigmaVersion -Encoding ascii
+
+    if (Test-Path $FigmaDir) { Remove-Item $FigmaDir -Recurse -Force }
+    New-Item -ItemType Directory -Path (Split-Path $FigmaDir) -Force | Out-Null
+    Move-Item $stage $FigmaDir
+    Note "Installed Figma MCP Bridge $FigmaVersion."
+  }
+
+  # Throws (with "Setup stopped:") on a problem; the caller turns that into a warning.
+  function Install-FigmaBridge {
+    if (-not (Has 'winget')) { Fail 'winget is needed for this step.' @('Install "App Installer" from the Microsoft Store.') }
+
+    # Node.js runs the bridge server (it needs 20 or later).
+    if ((Get-NodeMajor) -ge 20) {
+      Note "Node.js $("$(Invoke-Native { node --version })".Trim()) is installed."
+    } else {
+      Say 'Installing Node.js LTS'
+      if ($Dry) {
+        Note '[dry run] would install Node.js LTS with winget'
+      } else {
+        Invoke-Native { winget install --id OpenJS.NodeJS.LTS --exact --source winget --silent --accept-package-agreements --accept-source-agreements }
+        if ($LASTEXITCODE -ne 0) { Fail 'Installing Node.js LTS with winget failed.' }
+        Update-SessionPath
+        if ((Get-NodeMajor) -lt 20) {
+          Fail 'Node.js 20 or later is needed, but "node --version" still shows an older one (or none).' @('Remove the old Node.js (or switch with your version manager) and run this again.')
+        }
+      }
+    }
+
+    # The plugin runs only in the Figma desktop app, not in the browser.
+    if (Test-Path (Join-Path $env:LOCALAPPDATA 'Figma\Figma.exe')) {
+      Note 'The Figma desktop app is installed.'
+    } else {
+      Say 'Installing the Figma desktop app'
+      if ($Dry) {
+        Note '[dry run] would install the Figma desktop app with winget'
+      } else {
+        Invoke-Native { winget install --id Figma.Figma --exact --source winget --silent --accept-package-agreements --accept-source-agreements }
+        if ($LASTEXITCODE -ne 0) { Warn 'The Figma desktop app was not installed. Get it from https://www.figma.com/downloads/.' }
+      }
+    }
+
+    # Bridge server and plugin, both checked against the pinned checksums.
+    $entry = Join-Path $FigmaDir 'server\node_modules\@gethopp\figma-mcp-bridge\dist\index.js'
+    $manifest = Join-Path $FigmaDir 'plugin\manifest.json'
+    $marker = Join-Path $FigmaDir 'version'
+    $current = if (Test-Path $marker) { (Get-Content $marker -Raw).Trim() } else { '' }
+    if ($current -eq $FigmaVersion -and (Test-Path $entry) -and (Test-Path $manifest)) {
+      Note "Figma MCP Bridge $FigmaVersion is installed."
+    } else {
+      Say "Installing Figma MCP Bridge $FigmaVersion"
+      if ($Dry) { Note "[dry run] would download and install Figma MCP Bridge into $FigmaDir" } else { Install-FigmaFiles }
+    }
+
+    # Claude Code entry. run_script is on by team decision (CR-0.1.0-02, D5).
+    # Gita installs Claude Code in its own process, so this session's PATH may not
+    # have it yet; its installer puts claude.exe in ~\.local\bin.
+    if (-not (Has 'claude')) {
+      Update-SessionPath
+      $localBin = Join-Path $HOME '.local\bin'
+      if (-not (Has 'claude') -and (Test-Path (Join-Path $localBin 'claude.exe'))) { $env:Path = "$env:Path;$localBin" }
+    }
+    if (-not (Has 'claude')) {
+      Warn 'Claude Code is not on PATH yet, so the bridge was not added to it. Run this setup again in a new terminal.'
+      return
+    }
+    if ($Dry) { Note '[dry run] would add figma-bridge to Claude Code'; return }
+    $node = (Get-Command node).Source
+    $existing = "$(Invoke-Native { claude mcp get figma-bridge })"
+    if ($LASTEXITCODE -eq 0 -and $existing.Contains($entry) -and $existing.Contains($node) -and
+        $existing.Contains('FIGMA_BRIDGE_ENABLE_RUN_SCRIPT=1')) {
+      Note 'figma-bridge is already in Claude Code.'
+      return
+    }
+    Invoke-Native { claude mcp remove figma-bridge --scope user } | Out-Null
+    # '--' quoted: Windows PowerShell drops a bare -- before native commands.
+    Invoke-Native { claude mcp add figma-bridge --scope user --env FIGMA_BRIDGE_ENABLE_RUN_SCRIPT=1 '--' $node $entry } | Out-Null
+    if ($LASTEXITCODE -ne 0) { Fail 'Adding figma-bridge to Claude Code failed.' }
+    Note 'Added figma-bridge to Claude Code.'
   }
 
   # ------------------------------------------------------------ run
@@ -403,6 +572,26 @@ function Install-ThoughtBoxDevSetup {
     Invoke-Onboard $gita $file
     $code = $S.Code
     if ($code -ne 0) { Note "Gita stopped with exit code $code (see above)." }
+
+    # ---- Optional: Figma for frontend work (after a finished onboarding) ----
+    if ($code -eq 0 -and (Want-Figma)) {
+      Write-Host ''
+      Say 'Setting up Figma for frontend work'
+      try {
+        Install-FigmaBridge
+        if (-not $Dry) {
+          Record 'Figma, once: open the Figma desktop app, then Plugins > Development >'
+          Record '  Import plugin from manifest... and pick:'
+          Record "    $(Join-Path $FigmaDir 'plugin\manifest.json')"
+          Record '  Then open the shared Figma file, run "Figma MCP Bridge" from'
+          Record '  Plugins > Development, and start (or restart) claude.'
+        }
+      } catch {
+        # Optional step: say what went wrong; the rest of the setup is done.
+        Warn "The Figma step didn't finish: $($_.Exception.Message -replace '^Setup stopped: ', '')"
+        Warn 'Everything else is set up. Fix that and run the setup again with TB_FIGMA=1.'
+      }
+    }
   } catch {
     $code = 1
     Write-Host ''

@@ -14,6 +14,7 @@ we did, with diagrams.
 |---|---|
 | `hotfix/0.1.1` | [unreleased/hotfix-0.1.1.md](unreleased/hotfix-0.1.1.md) |
 | `feature/gita-onboarding` | [unreleased/feature-gita-onboarding.md](unreleased/feature-gita-onboarding.md) |
+| `feature/figma-bridge` | [unreleased/feature-figma-bridge.md](unreleased/feature-figma-bridge.md) |
 
 ## v0.2.0 – Alpha
 
@@ -28,3 +29,5 @@ we did, with diagrams.
 |---|---|
 | Change Request: Safe reinstall and clear errors | [v0.1.0/alpha/v0.1.0 - Change Request (Safe reinstall and clear errors).md](v0.1.0/alpha/v0.1.0%20-%20Change%20Request%20(Safe%20reinstall%20and%20clear%20errors).md) |
 | Alpha Test Cases: Safe reinstall and clear errors | [v0.1.0/alpha/v0.1.0 - Alpha Test Cases (Safe reinstall and clear errors).md](v0.1.0/alpha/v0.1.0%20-%20Alpha%20Test%20Cases%20(Safe%20reinstall%20and%20clear%20errors).md) |
+| Change Request: Optional Figma MCP Bridge setup | [v0.1.0/alpha/v0.1.0 - Change Request (Optional Figma MCP Bridge setup).md](v0.1.0/alpha/v0.1.0%20-%20Change%20Request%20(Optional%20Figma%20MCP%20Bridge%20setup).md) |
+| Alpha Test Cases: Optional Figma MCP Bridge setup | [v0.1.0/alpha/v0.1.0 - Alpha Test Cases (Optional Figma MCP Bridge setup).md](v0.1.0/alpha/v0.1.0%20-%20Alpha%20Test%20Cases%20(Optional%20Figma%20MCP%20Bridge%20setup).md) |

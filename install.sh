@@ -19,6 +19,8 @@
 #   TB_SKIP_STANDARDS=1 skip claude-standards and its setup (testing)
 #   TB_GITA_ARCHIVE=<path>     install Gita from a local archive (testing, no checksum)
 #   TB_ONBOARDING_FILE=<path>  use a local onboarding file (testing, no checksum)
+#   TB_FIGMA=1 / TB_FIGMA=0  set up the Figma MCP Bridge for frontend work (macOS),
+#                       or skip it, without being asked (default: ask; no terminal = skip)
 
 # Everything is inside main, so a half-downloaded script runs nothing.
 main() {
@@ -32,6 +34,12 @@ main() {
   local GITA_SHA256_LINUX="788f325874c6bb08761e93ae9f72323aa75482b0165c5c2bdbf172a58774e0da"   # SHA-256 of gita-linux-x64.tar.gz
   local ONBOARDING_URL="https://raw.githubusercontent.com/ThoughtBoxFinTechAI/dev-setup/main/thoughtbox-onboarding.json"
   local ONBOARDING_SHA256="a723840dd6b09911fea6b1afa42cfe641c21deb161d0cb66e3e9e6bf1431a196"
+
+  # ---- Pinned Figma MCP Bridge (optional step). Update together (see README). ----
+  local FIGMA_VERSION="0.0.25"
+  local FIGMA_NPM_SHA512="e4d49e8aed1cea7e18f42222ae4e854901341c9824e4f12c3a63b85d6abd61bfa16fc3ac39e7dda596bcb83440f26233ebc47fc6f458390967f6d85ed9aedb8a"   # SHA-512 of the npm tarball
+  local FIGMA_PLUGIN_SHA256="bf50a9ce330193bceb916c0eeb7252ce72a696f92a3369528139b6a4376d8550"   # SHA-256 of the release zip
+  local FIGMA_DIR="$HOME/.thoughtbox/figma-mcp-bridge"
 
   local GITA_HOME="$HOME/.gita"
   local GITA_CLI="$GITA_HOME/bin/gita"
@@ -124,7 +132,31 @@ main() {
   else
     "$gita" "${args[@]}" <"$TTY" || rc=$?
   fi
-  return "$rc"
+  [ "$rc" = 0 ] || return "$rc"
+
+  # ---- 4. Optional: Figma for frontend work ----
+  if want_figma; then
+    if [ "$os" != macos ]; then
+      note "Figma for frontend work is skipped: the Figma desktop app (which the bridge needs) isn't available on Linux."
+    else
+      echo >&2
+      say "Setting up Figma for frontend work"
+      # A subshell, so a "Setup stopped" inside only ends this optional step.
+      if (install_figma_bridge); then
+        [ "$DRY" = 1 ] || {
+          record "Figma, once: open the Figma desktop app, then Plugins > Development >"
+          record "  Import plugin from manifest... and pick:"
+          record "    $FIGMA_DIR/plugin/manifest.json"
+          record "  Then open the shared Figma file, run \"Figma MCP Bridge\" from"
+          record "  Plugins > Development, and start (or restart) claude."
+        }
+      else
+        warn "The Figma step didn't finish (see the message above). Everything else is set up."
+        warn "Fix that and run the setup again with TB_FIGMA=1."
+      fi
+    fi
+  fi
+  return 0
 }
 
 # ---------------------------------------------------------------- output
@@ -459,6 +491,148 @@ check_other_gita() {
     if [ "$DRY" = 1 ]; then record "Another gita at $p would be behind ~/.gita/bin (dry run)"
     else record "Another gita at $p is now behind ~/.gita/bin"; fi
   done
+}
+
+# ---------------------------------------------------------------- Figma (optional, see the README)
+
+# TB_FIGMA answers up front; otherwise ask. No terminal to ask in means no.
+want_figma() {
+  local answer
+  case "${TB_FIGMA:-}" in
+    1) return 0 ;;
+    0) return 1 ;;
+    "") ;;
+    *) warn "TB_FIGMA must be 1 or 0 (it is \"$TB_FIGMA\"), so the Figma step is skipped."; return 1 ;;
+  esac
+  [ "$TTY" != /dev/null ] || return 1
+  printf 'Set up Figma for frontend work (Figma MCP Bridge)? [y/N]: ' >&2
+  IFS= read -r answer <"$TTY" || true
+  answer=$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+  [ "$answer" = y ] || [ "$answer" = yes ]
+}
+
+node_major() {
+  local v
+  has node || { echo 0; return; }
+  v=$(node --version 2>/dev/null || true)
+  v=${v#v}; v=${v%%.*}
+  case "$v" in '' | *[!0-9]*) echo 0 ;; *) echo "$v" ;; esac
+}
+
+sha512_of() {
+  if has sha512sum; then sha512sum "$1" | cut -d' ' -f1; else shasum -a 512 "$1" | cut -d' ' -f1; fi
+}
+
+# macOS only. Runs in a subshell: set -e doesn't apply there (it is the left side
+# of an "if"), so every step checks its own result and calls fail.
+install_figma_bridge() {
+  # Node.js runs the bridge server (it needs 20 or later).
+  if [ "$(node_major)" -ge 20 ]; then
+    note "Node.js $(node --version) is installed."
+  else
+    has brew || fail 'Node.js 20 or later is needed.' 'Install Homebrew (https://brew.sh) or Node.js LTS (https://nodejs.org), then run this again.'
+    say "Installing Node.js"
+    if [ "$DRY" = 1 ]; then
+      note "[dry run] would install Node.js with Homebrew"
+    else
+      brew install node <"$TTY" || fail "Installing Node.js with Homebrew failed."
+      [ "$(node_major)" -ge 20 ] ||
+        fail 'Node.js 20 or later is needed, but "node --version" still shows an older one (or none).' 'Switch with your version manager, or remove the old Node.js, and run this again.'
+    fi
+  fi
+
+  # The plugin runs only in the Figma desktop app, not in the browser.
+  if [ -d /Applications/Figma.app ] || [ -d "$HOME/Applications/Figma.app" ]; then
+    note "The Figma desktop app is installed."
+  elif has brew; then
+    say "Installing the Figma desktop app"
+    if [ "$DRY" = 1 ]; then
+      note "[dry run] would install the Figma desktop app with Homebrew"
+    elif ! brew install --cask figma <"$TTY"; then
+      warn "The Figma desktop app was not installed. Get it from https://www.figma.com/downloads/."
+    fi
+  else
+    warn "The Figma desktop app isn't installed. Get it from https://www.figma.com/downloads/."
+  fi
+
+  # Bridge server and plugin, both checked against the pinned checksums.
+  local entry="$FIGMA_DIR/server/node_modules/@gethopp/figma-mcp-bridge/dist/index.js"
+  local manifest="$FIGMA_DIR/plugin/manifest.json"
+  local current=""
+  [ -f "$FIGMA_DIR/version" ] && current=$(tr -d '[:space:]' <"$FIGMA_DIR/version")
+  if [ "$current" = "$FIGMA_VERSION" ] && [ -f "$entry" ] && [ -f "$manifest" ]; then
+    note "Figma MCP Bridge $FIGMA_VERSION is installed."
+  else
+    say "Installing Figma MCP Bridge $FIGMA_VERSION"
+    if [ "$DRY" = 1 ]; then
+      note "[dry run] would download and install Figma MCP Bridge into $FIGMA_DIR"
+    else
+      install_figma_files
+    fi
+  fi
+
+  # Claude Code entry. run_script is on by team decision (CR-0.1.0-02, D5).
+  if ! has claude; then
+    warn "Claude Code is not on PATH yet, so the bridge was not added to it. Run this setup again in a new terminal."
+    return 0
+  fi
+  if [ "$DRY" = 1 ]; then note "[dry run] would add figma-bridge to Claude Code"; return 0; fi
+  local node_bin existing
+  node_bin=$(command -v node)
+  existing=$(claude mcp get figma-bridge 2>/dev/null </dev/null || true)
+  case "$existing" in
+    *"$entry"*)
+      case "$existing" in
+        *"$node_bin"*FIGMA_BRIDGE_ENABLE_RUN_SCRIPT=1* | *FIGMA_BRIDGE_ENABLE_RUN_SCRIPT=1*"$node_bin"*)
+          note "figma-bridge is already in Claude Code."; return 0 ;;
+      esac ;;
+  esac
+  claude mcp remove figma-bridge --scope user >/dev/null 2>&1 </dev/null || true
+  claude mcp add figma-bridge --scope user --env FIGMA_BRIDGE_ENABLE_RUN_SCRIPT=1 -- "$node_bin" "$entry" >/dev/null </dev/null ||
+    fail "Adding figma-bridge to Claude Code failed."
+  note "Added figma-bridge to Claude Code."
+}
+
+install_figma_files() {
+  local work tgz zip url actual stage
+  if pgrep -f "$FIGMA_DIR/server" >/dev/null 2>&1; then
+    fail "The Figma bridge is running." "Close Claude Code (and any other AI tool using it), then run this again."
+  fi
+  work="$TB_TMP/figma"
+  mkdir -p "$work" || fail "Couldn't make a temporary folder."
+
+  note "Downloading @gethopp/figma-mcp-bridge@$FIGMA_VERSION from npm"
+  (cd "$work" && npm pack "@gethopp/figma-mcp-bridge@$FIGMA_VERSION" --silent >/dev/null </dev/null) ||
+    fail "Couldn't download the bridge server from npm."
+  tgz=$(find "$work" -maxdepth 1 -name '*.tgz' | head -n 1)
+  [ -n "$tgz" ] || fail "npm didn't produce the bridge server package."
+  actual=$(sha512_of "$tgz")
+  [ "$actual" = "$FIGMA_NPM_SHA512" ] ||
+    fail "The bridge server download doesn't match its pinned checksum." "Nothing was installed. Tell an admin."
+
+  zip="$work/plugin.zip"
+  url="https://github.com/gethopp/figma-mcp-bridge/releases/download/v$FIGMA_VERSION/figma-mcp-bridge-v$FIGMA_VERSION.zip"
+  note "Downloading $url"
+  download "$url" "$zip" || fail "Couldn't download the Figma plugin."
+  actual=$(sha256_of "$zip")
+  [ "$actual" = "$FIGMA_PLUGIN_SHA256" ] ||
+    fail "The Figma plugin download doesn't match its pinned checksum." "Nothing was installed. Tell an admin."
+  note "Checksums OK."
+
+  # Build the new copy next to the downloads, then swap it in.
+  stage="$work/bridge"
+  mkdir -p "$stage/server" "$work/zip" || fail "Couldn't make a temporary folder."
+  npm install --prefix "$stage/server" "$tgz" --ignore-scripts --omit=dev --no-audit --no-fund --silent </dev/null ||
+    fail "Couldn't install the bridge server's packages with npm."
+  ditto -x -k "$zip" "$work/zip" || fail "Couldn't unpack the Figma plugin."
+  [ -f "$work/zip/plugin/manifest.json" ] || fail "The Figma plugin download has no plugin/manifest.json."
+  mv "$work/zip/plugin" "$stage/plugin" || fail "Couldn't unpack the Figma plugin."
+  printf '%s\n' "$FIGMA_VERSION" >"$stage/version" || fail "Couldn't write $stage/version."
+
+  rm -rf "$FIGMA_DIR" || fail "Couldn't remove the old $FIGMA_DIR."
+  mkdir -p "$(dirname "$FIGMA_DIR")" || fail "Couldn't make $(dirname "$FIGMA_DIR")."
+  mv "$stage" "$FIGMA_DIR" || fail "Couldn't move the bridge into $FIGMA_DIR."
+  note "Installed Figma MCP Bridge $FIGMA_VERSION."
 }
 
 main "$@"
