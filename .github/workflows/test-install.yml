@@ -166,3 +166,19 @@ jobs:
           if (-not $gita) { $gita = Get-ChildItem "$HOME\.gita\bin\gita.exe" }
           & $gita --version
           if ($LASTEXITCODE -ne 0) { throw "gita doesn't run" }
+      - name: Claude Code's folder is on the user PATH
+        shell: pwsh
+        run: |
+          $dir = Join-Path $HOME '.local\bin'
+          if (-not (Test-Path (Join-Path $dir 'claude.exe'))) { Write-Host "No claude.exe in $dir; nothing to check."; exit 0 }
+          $user = [Environment]::GetEnvironmentVariable('Path', 'User') -split ';' | ForEach-Object { [Environment]::ExpandEnvironmentVariables($_).TrimEnd('\') }
+          if ($user -notcontains $dir) { throw "$dir is not on the user PATH: $($user -join ';')" }
+      - name: A failed run under irm | iex with strict mode on (Windows PowerShell)
+        shell: powershell
+        env:
+          TB_ONBOARDING_FILE: missing-onboarding.json
+        run: |
+          Set-StrictMode -Version Latest
+          Get-Content ./install.ps1 -Raw | Invoke-Expression
+          if ($LASTEXITCODE -ne 1) { throw "expected exit code 1, got $LASTEXITCODE" }
+          $global:LASTEXITCODE = 0
