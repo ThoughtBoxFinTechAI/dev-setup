@@ -18,8 +18,9 @@ or reinstall what is broken, clean up old GitHub sign-ins, and explain failures 
   "ok", "old" or "broken" (present but won't run). Missing and broken are (re)installed,
   old is updated, ok is kept.
 - **Gita install:** old `bin` and `lib` are deleted before the new files are copied, so
-  macOS never runs a file with a stale signature. If it still won't start on macOS, it is
-  re-signed ad hoc. A running Gita is found and you are asked to close it.
+  macOS never runs a file with a stale signature. On macOS the command inside `gita.app`
+  must start too; if it doesn't, it is re-signed with the entitlement the Dart runtime
+  needs (from PR #3, merged in). A running Gita is found and you are asked to close it.
 - **Clean-up (new step):** finds saved github.com logins (Credential Manager, Keychain,
   `~/.git-credentials`), github.com `insteadOf` rules, sign-in headers, old credential
   helpers and gh logins. It lists them, asks (or uses `TB_CLEAN=1`), backs up
@@ -37,13 +38,13 @@ or reinstall what is broken, clean up old GitHub sign-ins, and explain failures 
 
 ## Tests and results
 
-31 Alpha cases (`SETUP-001`…`SETUP-031`): **28 pass, 0 fail, 3 not run** — see
+32 Alpha cases (`SETUP-001`…`SETUP-032`): **30 pass, 0 fail, 2 not run** — see
 `documents/v0.1.0/alpha/v0.1.0 - Alpha Test Cases (Safe reinstall and clear errors).md`.
 Tested on Windows 11 (PowerShell 5.1 and 7.4) and Linux (WSL) in throwaway homes with fake
 old settings, including a home folder with spaces and non-English letters, a wrong
 checksum, a failed download, a run killed halfway, and a claude-standards copy that has
 moved on from GitHub.
-**Not run:** macOS, `shellcheck`, Windows prompts in a real terminal, a real Git
+**Not run:** macOS (CI now runs it on macOS), Windows prompts in a real terminal, a real Git
 Credential Manager, the browser sign-in.
 
 ## Bugs fixed
@@ -80,4 +81,4 @@ Credential Manager, the browser sign-in.
   (company rule §7; the repo has none).
 - Sign and notarise the macOS Gita build in the gita repo, so ad-hoc re-signing is not
   needed.
-- Run `shellcheck` and the PowerShell parser in CI.
+- Add the PowerShell parser and Windows PowerShell 5.1 to CI (`shellcheck` already runs there).

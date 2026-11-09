@@ -17,6 +17,9 @@ email, and you'll sign in to GitHub twice: once per account. The rest is automat
 it again any time: every step checks what is already there, keeps what works, and
 repairs or reinstalls what is broken.
 
+Macs need Apple silicon (M1 or later): the Gita command isn't built for Intel Macs yet.
+Linux needs x86_64.
+
 ## What it does
 
 | Step | Details |

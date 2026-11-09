@@ -50,6 +50,9 @@ main() {
   local os asset sha app_dir cli_dir
   case "$(uname -s)" in
     Darwin)
+      # hw.optional.arm64, not uname -m, which says x86_64 under Rosetta.
+      [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ] ||
+        fail "Gita's gita command is only built for Apple silicon Macs (M1 or later); this Mac has an Intel processor."
       os=macos; asset=gita-macos.zip; sha=$GITA_SHA256_MACOS
       app_dir="$HOME/Applications/gita.app"; cli_dir="$app_dir/Contents/Resources/cli" ;;
     Linux)
@@ -117,7 +120,9 @@ main() {
     say "Setting up Claude Code with the company standards"
     [ -f "$STANDARDS_DIR/setup.sh" ] || [ "$DRY" = 1 ] ||
       fail "$STANDARDS_DIR has no setup.sh." "It may be an old or incomplete copy. Move the folder away and run this again."
-    change "run the claude-standards setup" bash "$STANDARDS_DIR/setup.sh" ||
+    # No terminal input: it asks nothing, and "claude plugin" crashes when its
+    # input is /dev/tty (Bun on macOS: "EINVAL: invalid argument, kqueue").
+    TTY=/dev/null change "run the claude-standards setup" bash "$STANDARDS_DIR/setup.sh" ||
       fail "The claude-standards setup failed (its messages are above)." "Fix what it says, then run this again. Finished steps are skipped."
     ok "done"
     connect_claude
@@ -393,8 +398,14 @@ sha256_of() {
 # Prints missing | ok | old:<version> | broken:<exit code>.
 gita_state() {
   [ -e "$GITA_CLI" ] || { echo missing; return; }
+  # The Mac app copies its own command over ~/.gita when it starts, so the
+  # copy inside gita.app has to run too (see fix_macos_cli_signature).
+  if [ "$os" = macos ] && ! { "$cli_dir/bin/gita" --version; } >/dev/null 2>&1; then
+    echo broken:app; return
+  fi
   local out rc=0
-  out=$("$GITA_CLI" --version 2>/dev/null) || rc=$?
+  # Braces: bash itself prints "Killed: 9" for a killed command otherwise.
+  out=$({ "$GITA_CLI" --version; } 2>/dev/null) || rc=$?
   if [ "$rc" -ne 0 ]; then echo "broken:$rc"
   elif [ "$out" = "gita $GITA_VERSION" ]; then echo ok
   else echo "old:${out#gita }"; fi
@@ -402,6 +413,7 @@ gita_state() {
 
 broken_reason() {  # exit code
   case $1 in
+    app) echo "the gita command inside the Gita app doesn't start" ;;
     137) echo "the system stopped it (Killed: 9)" ;;
     126) echo "it isn't allowed to run" ;;
     127) echo "a file it needs is missing" ;;
@@ -471,6 +483,7 @@ install_gita() {
     mkdir -p "$(dirname "$app_dir")"
     rm -rf "$app_dir"
     mv "$work/app/gita.app" "$app_dir"
+    fix_macos_cli_signature
   else
     tar -xzf "$file" -C "$work/app" || fail "Couldn't unpack the Gita download." "Run this again; if it repeats, tell an admin."
     [ -x "$work/app/cli/bin/gita" ] || fail "The Gita download has no cli/bin/gita." "Tell an admin."
@@ -508,12 +521,6 @@ EOF
 
 verify_gita() {
   local st; st=$(gita_state)
-  if [ "$os" = macos ] && [ "${st%%:*}" = broken ]; then
-    # Fallback only: a good, signed build never reaches this.
-    warn "macOS stopped the new Gita: $(broken_reason "${st#broken:}"). Re-signing it on this Mac and trying again."
-    codesign --force --sign - "$GITA_CLI" || warn "Re-signing failed."
-    st=$(gita_state)
-  fi
   case $st in
     ok) note "Installed gita $GITA_VERSION and checked that it runs." ;;
     broken:*) fail "Gita was installed but doesn't run: $(broken_reason "${st#broken:}")." \
@@ -521,6 +528,38 @@ verify_gita() {
     old:*) fail "Gita was installed but reports version ${st#old:} instead of $GITA_VERSION." "Tell an admin." ;;
     *) fail "Gita was installed but $GITA_CLI is missing." "Tell an admin." ;;
   esac
+}
+
+# Gita 1.0.2's command is signed with the hardened runtime but without the
+# entitlement the Dart runtime needs to run its compiled code, so newer macOS
+# kills it on start ("Killed: 9"). If the bundled command won't run, sign it
+# again (ad hoc) with that entitlement. It is fixed inside gita.app, not just
+# in ~/.gita, because the app copies its command to ~/.gita every time it
+# starts. Does nothing once a Gita release ships a command that runs.
+fix_macos_cli_signature() {
+  local exe="$cli_dir/bin/gita" ent f
+  { "$exe" --version; } >/dev/null 2>&1 && return 0   # braces: no "Killed: 9" line
+  note "Re-signing the gita command so macOS lets it run."
+  ent="$work/cli.entitlements"
+  cat >"$ent" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+</dict>
+</plist>
+EOF
+  find "$cli_dir" -type f \( -perm -u+x -o -name '*.dylib' \) | while IFS= read -r f; do
+    codesign --force --sign - --options runtime --entitlements "$ent" "$f" 2>/dev/null ||
+      fail "Couldn't re-sign $f."
+  done
+  # Re-seal the app, since files inside it changed, keeping its own entitlements.
+  codesign --force --sign - --preserve-metadata=entitlements,flags "$app_dir" 2>/dev/null ||
+    fail "Couldn't re-sign $app_dir."
+  { "$exe" --version; } >/dev/null 2>&1 ||
+    fail "The gita command still won't run on this Mac after re-signing it. Tell an admin."
 }
 
 add_to_path() {
@@ -604,7 +643,7 @@ find_cleanup() {
     fi
   done
   if [ -f "$HOME/.ssh/config" ] && grep -qiE '^[[:space:]]*host[[:space:]].*github\.com' "$HOME/.ssh/config"; then
-    CLEAN_REPORT+=('~/.ssh/config has a "Host github.com" entry. It only matters for SSH addresses (git@github.com:...) and was not changed.')
+    CLEAN_REPORT+=('Your SSH settings file (.ssh/config in your home folder) has a "Host github.com" entry. It only matters for SSH addresses (git@github.com:...) and was not changed.')
   fi
 }
 
@@ -841,7 +880,7 @@ clone_standards() {
     note "     the one that is a member of ThoughtBoxFinTechAI."
     note "  3. Your account hasn't been added to ThoughtBoxFinTechAI yet. Ask an admin."
     note "  4. No connection to github.com."
-    [ "$try" = 1 ] && [ "$TTY" != /dev/null ] && [ "${TB_SKIP_SIGNIN:-0}" != 1 ] || break
+    if [ "$try" != 1 ] || [ "$TTY" = /dev/null ] || [ "${TB_SKIP_SIGNIN:-0}" = 1 ]; then break; fi
     ask_yn "Sign \"$LABEL_ONE\" in to GitHub again and retry?" y || break
     signin_flow "$id_one" "$email_one" "$LABEL_ONE" "$id_io"
   done
