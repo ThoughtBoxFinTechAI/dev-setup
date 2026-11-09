@@ -2,29 +2,41 @@
 #
 #   irm https://raw.githubusercontent.com/ThoughtBoxFinTechAI/dev-setup/main/install.ps1 | iex
 #
-# Installs Git, GitHub CLI, Claude Code and Gita, sets up your two GitHub
-# accounts (@thoughtbox.io and @thoughtbox.one), clones claude-standards and
-# runs its setup. Safe to run again: steps that are already done are skipped.
+# Installs or updates Gita (a pinned release, checked against its SHA-256),
+# downloads the ThoughtBox onboarding file (also checked), and runs
+# "gita onboard" with it. Gita does the rest: Git, GitHub CLI and Claude Code,
+# clean-up of old GitHub sign-ins, your two GitHub accounts (@thoughtbox.io and
+# @thoughtbox.one), claude-standards and its setup, Gita in Claude Code, and a
+# final check with a summary. Safe to run again: finished steps are skipped.
 #
-# Optional environment variables (set them before running):
+# Optional environment variables (set them before running, e.g. $env:TB_DRY_RUN = '1'):
 #   TB_NAME, TB_EMAIL_IO, TB_EMAIL_ONE  answers to the questions, to skip them
 #   TB_DRY_RUN=1        print what would change, change nothing
-#   TB_GITA_ZIP=<path>  install Gita from a local zip (testing, no checksum)
+#   TB_CLEAN=1          remove old GitHub sign-ins and settings without asking
+#   TB_LOG=<path>       write the log here instead of ~\.thoughtbox-setup.log
 #   TB_SKIP_SIGNIN=1    don't sign in to GitHub (testing)
-#   TB_SKIP_STANDARDS=1 skip claude-standards and the Claude Code setup (testing)
+#   TB_SKIP_STANDARDS=1 skip claude-standards and its setup (testing)
+#   TB_GITA_ZIP=<path>         install Gita from a local zip (testing, no checksum)
+#   TB_ONBOARDING_FILE=<path>  use a local onboarding file (testing, no checksum)
 #   TB_FIGMA=1 / TB_FIGMA=0  set up the Figma MCP Bridge for frontend work, or skip
 #                       it, without being asked (default: ask; no terminal = skip)
+#   TB_TEST_USER_PATH_FILE=<path>  read and write the user PATH in this file instead
+#                       of the registry (testing)
+#   TB_TEST_MACHINE_PATH=<value>   use this as the system PATH (testing, read only)
 
 # Everything is inside a function, so a half-downloaded script runs nothing.
 function Install-ThoughtBoxDevSetup {
   $ErrorActionPreference = 'Stop'
   Set-StrictMode -Version 2
 
-  # ---- Pinned versions. Update with every Gita release (see README). ----
-  $GitaRepo    = 'naseebnaushad/gita'
-  $GitaVersion = '1.0.2'
-  $GitaAsset   = 'gita-windows-x64.zip'
-  $GitaSha256  = 'd73ba7b9a1e34498e32432b6e73eb3d9007bb1cab1b51cc292a351b0d7d4334d'   # SHA-256 of $GitaAsset for $GitaVersion
+  # ---- Pinned versions. The gita-bump workflow updates these lines. ----
+  $GitaRepo = 'naseebnaushad/gita'
+  $GitaVersion = '1.1.0'
+  $GitaAsset = 'gita-windows-x64.zip'
+  # Checksum: filled in by the gita-bump workflow PR.
+  $GitaSha256 = '415d4269e3393857fe3ddba611c483e256599a9520dcbb0003de667f811cc9c0'   # SHA-256 of $GitaAsset for $GitaVersion
+  $OnboardingUrl = 'https://raw.githubusercontent.com/ThoughtBoxFinTechAI/dev-setup/main/thoughtbox-onboarding.json'
+  $OnboardingSha256 = 'a723840dd6b09911fea6b1afa42cfe641c21deb161d0cb66e3e9e6bf1431a196'
 
   # ---- Pinned Figma MCP Bridge (optional step). Update together (see README). ----
   $FigmaVersion      = '0.0.25'
@@ -32,126 +44,361 @@ function Install-ThoughtBoxDevSetup {
   $FigmaPluginSha256 = 'bf50a9ce330193bceb916c0eeb7252ce72a696f92a3369528139b6a4376d8550'   # SHA-256 of the release zip
   $FigmaDir          = Join-Path $HOME '.thoughtbox\figma-mcp-bridge'
 
-  $StandardsUrl ='https://github.com/ThoughtBoxFinTechAI/claude-standards.git'
-  $StandardsDir = Join-Path $HOME 'claude-standards'
-  $GitaHome     = Join-Path $HOME '.gita'
-  $GitaCli      = Join-Path $GitaHome 'bin\gita.exe'
-  $GitaAppDir   = Join-Path $env:LOCALAPPDATA 'Programs\Gita'
-  $LabelIo      = 'ThoughtBox'
-  $LabelOne     = 'ThoughtBox AI'
+  $GitaHome   = Join-Path $HOME '.gita'
+  $GitaCli    = Join-Path $GitaHome 'bin\gita.exe'
+  $GitaAppDir = Join-Path $env:LOCALAPPDATA 'Programs\Gita'
+  $Dry        = $env:TB_DRY_RUN -eq '1'
 
-  $Dry = $env:TB_DRY_RUN -eq '1'
+  # Questions need a real console; without one, defaults are used.
+  $Interactive = [Environment]::UserInteractive -and -not [Console]::IsInputRedirected -and
+    -not ([Environment]::GetCommandLineArgs() | Where-Object { $_ -match '^-noni' })
+
+  # Shared state (an object, so the helper functions below can change it).
+  $S = @{ Log = ''; Tmp = ''; Code = 0; Notes = New-Object System.Collections.ArrayList }
 
   function Say([string]$Text) { Write-Host "==> $Text" -ForegroundColor Cyan }
   function Note([string]$Text) { Write-Host "    $Text" }
   function Warn([string]$Text) { Write-Host "    ! $Text" -ForegroundColor Yellow }
-  function Fail([string]$Text) { throw "Setup stopped: $Text" }
-
-  # Runs a step that changes something, or only prints it in a dry run.
-  function Change([string]$What, [scriptblock]$Do) {
-    if ($Dry) { Note "[dry run] would $What"; return }
-    & $Do
+  # Fail "what went wrong" "what to do"...: stops the setup.
+  function Fail([string]$Text, [string[]]$Hints = @()) {
+    $msg = "Setup stopped: $Text"
+    foreach ($h in $Hints) { $msg += "`n    $h" }
+    throw $msg
   }
 
-  function Has([string]$Cmd) { [bool](Get-Command $Cmd -ErrorAction SilentlyContinue) }
+  # The log holds this run only and is readable by you only. No step prints a token.
+  function Start-Log {
+    $path = if ($env:TB_LOG) { $env:TB_LOG } else { Join-Path $HOME '.thoughtbox-setup.log' }
+    try {
+      if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
+      New-Item -ItemType File -Path $path -Force | Out-Null
+      $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+      & icacls.exe $path /inheritance:r /grant:r "*${sid}:(F)" | Out-Null
+      Start-Transcript -LiteralPath $path -Append | Out-Null
+      $S.Log = $path
+      Note "ThoughtBox dev-setup, $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), Windows $([Environment]::OSVersion.Version)"
+    } catch {
+      Warn "Couldn't create the log file ${path}; carrying on without it."
+    }
+  }
 
-  # GitHub's release downloads sometimes answer 502/503/504 for a while, so try
-  # up to five times, waiting longer each time (10 s up to 40 s), before giving up.
-  function Get-Download([string]$Url, [string]$OutFile) {
-    $ProgressPreference = 'SilentlyContinue'
-    for ($try = 1; ; $try++) {
-      try {
-        Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing -TimeoutSec 120
-        return
-      } catch {
-        if ($try -ge 5) { throw }
-        Warn "Download failed ($($_.Exception.Message)); trying again in $($try * 10) seconds."
-        Start-Sleep -Seconds ($try * 10)
+  # Yes/no question; without a terminal, the default.
+  function Ask-YN([string]$Question, [bool]$Default) {
+    if (-not $Interactive) { return $Default }
+    $hint = if ($Default) { '[Y/n]' } else { '[y/N]' }
+    $a = Read-Host "    $Question $hint"
+    if ($a -match '^[Yy]') { return $true }
+    if ($a -match '^[Nn]') { return $false }
+    return $Default
+  }
+
+  # Runs a native command quietly; returns @{ Code; Out }. PowerShell 5.1 turns
+  # a native program's error output into errors, so errors only stop it later.
+  function Capture([scriptblock]$Do) {
+    $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    try {
+      $out = & $Do 2>&1 | ForEach-Object { "$_" }
+      return @{ Code = $LASTEXITCODE; Out = (@($out) -join "`n") }
+    } catch {
+      return @{ Code = 9009; Out = $_.Exception.Message }
+    } finally { $ErrorActionPreference = $old }
+  }
+
+  function Record([string]$Text) { [void]$S.Notes.Add($Text) }   # a line for the script's short summary
+
+  # The user PATH as stored, with %VARIABLES% kept (the registry value is
+  # REG_EXPAND_SZ). TB_TEST_USER_PATH_FILE points it at a file for tests.
+  function Get-UserPathRaw {
+    if ($env:TB_TEST_USER_PATH_FILE) {
+      if (Test-Path -LiteralPath $env:TB_TEST_USER_PATH_FILE) { return [IO.File]::ReadAllText($env:TB_TEST_USER_PATH_FILE).Trim() }
+      return ''
+    }
+    $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')
+    if (-not $key) { return '' }
+    try { return [string]$key.GetValue('Path', '', 'DoNotExpandEnvironmentNames') } finally { $key.Close() }
+  }
+
+  function Set-UserPathRaw([string]$Value) {
+    if ($env:TB_TEST_USER_PATH_FILE) { [IO.File]::WriteAllText($env:TB_TEST_USER_PATH_FILE, $Value); return }
+    $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')
+    try { $key.SetValue('Path', $Value, [Microsoft.Win32.RegistryValueKind]::ExpandString) } finally { $key.Close() }
+    # Tells Windows (and new terminals) that the environment changed.
+    [Environment]::SetEnvironmentVariable('TB_DEV_SETUP_REFRESH', $null, 'User')
+  }
+
+  # Entries of the system or user PATH, with %VARIABLES% expanded.
+  function Get-PathEntries([string]$Scope) {
+    $raw = if ($Scope -eq 'User') { Get-UserPathRaw }
+      elseif ($env:TB_TEST_MACHINE_PATH) { $env:TB_TEST_MACHINE_PATH }
+      else { [Environment]::GetEnvironmentVariable('Path', 'Machine') }
+    return @("$raw" -split ';' | Where-Object { $_ } | ForEach-Object { [Environment]::ExpandEnvironmentVariables($_) })
+  }
+
+  function Test-SameDir([string]$A, [string]$B) {
+    return [Environment]::ExpandEnvironmentVariables($A).TrimEnd('\') -eq $B.TrimEnd('\')
+  }
+
+  # Picks up PATH changes made by installers, without a new terminal. Keeps
+  # this session's own entries first and adds the new ones after them.
+  function Update-SessionPath {
+    $machine = (Get-PathEntries 'Machine') -join ';'
+    $user = (Get-PathEntries 'User') -join ';'
+    $all = New-Object System.Collections.ArrayList
+    foreach ($p in (@($env:Path, $machine, $user, (Join-Path $GitaHome 'bin')) -join ';') -split ';') {
+      if ($p -and -not ($all -contains $p)) { [void]$all.Add($p) }
+    }
+    $env:Path = $all -join ';'
+  }
+
+  # Makes ~\.gita\bin the first entry of the user PATH (moved, never doubled),
+  # so another gita in the user PATH can't run instead of Gita's.
+  function Set-GitaFirstInUserPath {
+    $dir = Join-Path $GitaHome 'bin'
+    $raw = Get-UserPathRaw
+    $parts = @("$raw" -split ';' | Where-Object { $_ })
+    $rest = @($parts | Where-Object { -not (Test-SameDir $_ $dir) })
+    $new = (@($dir) + $rest) -join ';'
+    if ($new -eq ($parts -join ';')) { return }
+    $what = if ($rest.Count -lt $parts.Count) { 'Moved ~\.gita\bin to the front of your user PATH' } else { 'Added ~\.gita\bin to the front of your user PATH' }
+    if ($Dry) { Note "[dry run] would put $dir first in your user PATH"; Record "$what (dry run)"; return }
+    Set-UserPathRaw $new
+    Record $what
+  }
+
+  # Another gita.exe or gita.cmd on PATH would run instead of Gita's. Windows
+  # puts the system PATH before the user PATH, so one there needs an admin.
+  function Find-OtherGita {
+    $dir = Join-Path $GitaHome 'bin'
+    $seen = @{}
+    foreach ($scope in 'Machine', 'User') {
+      foreach ($d in Get-PathEntries $scope) {
+        if ((Test-SameDir $d $dir) -or $seen.ContainsKey($d.ToLowerInvariant())) { continue }
+        $seen[$d.ToLowerInvariant()] = $true
+        foreach ($name in 'gita.exe', 'gita.cmd') {
+          $p = Join-Path $d $name
+          if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { continue }
+          if ($scope -eq 'Machine') {
+            Warn "Another gita is at $p, in the system PATH, which Windows puts before your own PATH, so it runs instead of Gita's."
+            Note "Remove it, or ask IT to remove $d from the system PATH."
+            Record "Another gita at $p runs first (system PATH; remove it or ask IT)"
+          } else {
+            Warn "Another gita is at $p. ~\.gita\bin is now first in your user PATH, so it is behind Gita's; open a new terminal."
+            Note "You can remove it if you don't need it."
+            if ($Dry) { Record "Another gita at $p would be behind ~\.gita\bin (dry run)" } else { Record "Another gita at $p is now behind ~\.gita\bin" }
+          }
+        }
       }
     }
   }
 
-  # Picks up PATH changes made by installers, without a new terminal.
-  function Update-SessionPath {
-    $machine = [Environment]::GetEnvironmentVariable('Path', 'Machine')
-    $user = [Environment]::GetEnvironmentVariable('Path', 'User')
-    $env:Path = (@($machine, $user, (Join-Path $GitaHome 'bin'), (Join-Path $HOME '.local\bin')) |
-      Where-Object { $_ }) -join ';'
-  }
-
-  function Add-UserPath([string]$Dir) {
-    $user = [Environment]::GetEnvironmentVariable('Path', 'User')
-    $parts = @($user -split ';' | Where-Object { $_ })
-    if ($parts -contains $Dir) { return }
-    Change "add $Dir to your PATH" {
-      [Environment]::SetEnvironmentVariable('Path', (($parts + $Dir) -join ';'), 'User')
+  function Get-WithRetry([string]$Url, [string]$OutFile, [string]$What) {
+    $ProgressPreference = 'SilentlyContinue'
+    # GitHub's release downloads sometimes fail for a moment (a CI run hit
+    # a 504): five tries, waiting longer each time.
+    for ($i = 1; $i -le 5; $i++) {
+      try { Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing -TimeoutSec 300; return }
+      catch {
+        if ($i -eq 5) {
+          Fail "Couldn't download ${What}: $($_.Exception.Message)" @('Check your internet connection and that github.com opens in your browser, then run this again.')
+        }
+        Start-Sleep -Seconds (5 * $i)
+      }
     }
   }
 
-  # Runs a native command and stops the setup if it fails.
-  function Run([string]$What, [scriptblock]$Do) {
-    if ($Dry) { Note "[dry run] would $What"; return }
-    & $Do
-    if ($LASTEXITCODE -ne 0) { Fail "$What failed (exit $LASTEXITCODE)." }
+  function Get-Sha256([string]$Path) { return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
+
+  # Compares dotted version numbers as numbers, ignoring anything after "-".
+  # Returns 1 if A is newer, -1 if older, 0 if the same.
+  function Compare-Version([string]$A, [string]$B) {
+    $x = @(($A -replace '-.*$', '') -split '\.'); $y = @(($B -replace '-.*$', '') -split '\.')
+    for ($i = 0; $i -lt [Math]::Max($x.Count, $y.Count); $i++) {
+      [long]$p = 0; [long]$q = 0
+      if ($i -lt $x.Count) { [void][long]::TryParse(($x[$i] -replace '\D', ''), [ref]$p) }
+      if ($i -lt $y.Count) { [void][long]::TryParse(($y[$i] -replace '\D', ''), [ref]$q) }
+      if ($p -gt $q) { return 1 }
+      if ($p -lt $q) { return -1 }
+    }
+    return 0
   }
 
-  function Ask([string]$Prompt, [string]$Default, [string]$Preset) {
-    if ($Preset) { return $Preset.Trim() }
-    $suffix = if ($Default) { " [$Default]" } else { '' }
-    $answer = Read-Host "$Prompt$suffix"
-    if (-not $answer) { $answer = $Default }
-    return "$answer".Trim()
+  # missing | ok | older:<version> | newer:<version> | broken:<reason code>
+  function Get-GitaState {
+    if (-not (Test-Path -LiteralPath $GitaCli)) { return 'missing' }
+    $r = Capture { & $GitaCli --version }
+    if ($r.Code -ne 0) { return "broken:$($r.Code)" }
+    if ($r.Out.Trim() -notmatch '^gita (\d\S*)$') { return 'broken:version' }
+    $v = $Matches[1]
+    switch (Compare-Version $v $GitaVersion) { 0 { return 'ok' } 1 { return "newer:$v" } default { return "older:$v" } }
   }
 
-  function Ask-Email([string]$Prompt, [string]$Domain, [string]$Preset) {
-    while ($true) {
-      $email = (Ask $Prompt '' $Preset).ToLowerInvariant()
-      if ($email -match "^[^@\s]+@$([regex]::Escape($Domain))$") { return $email }
-      if ($Preset) { Fail "$email is not an @$Domain address." }
-      Warn "Please enter your @$Domain address."
+  function Broken-Reason([string]$Code) {
+    switch ($Code) {
+      'version'     { return "it doesn't say its version" }
+      '-1073741515' { return 'a file it needs is missing (0xC0000135)' }
+      '9009'        { return "Windows couldn't start it" }
+      default       { return "it exits with code $Code" }
     }
   }
 
-  function Get-Profiles {
-    if (-not (Test-Path $GitaCli)) { return @() }
-    $json = & $GitaCli profiles --json | Out-String
-    if ($LASTEXITCODE -ne 0) { Fail 'gita profiles failed.' }
-    return @(($json | ConvertFrom-Json).profiles)
-  }
-
-  # Returns the id of the profile for this email, adding one if needed.
-  function Ensure-Profile([string]$Name, [string]$Email, [string]$Label) {
-    $found = @(Get-Profiles | Where-Object { $_.email -eq $Email })
-    if ($found.Count -gt 0) {
-      Note "Profile for $Email already exists (`"$($found[0].label)`")."
-      return $found[0].id
+  # Windows can't replace a program while it runs: Gita, and the Gita helper
+  # that Claude Code starts, must be closed first.
+  function Close-Gita {
+    $procs = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+        $p = $null; try { $p = $_.Path } catch { }
+        $p -and ($p -like "$GitaAppDir\*" -or $p -like "$GitaHome\bin\*")
+      })
+    if ($procs.Count -eq 0) { return }
+    Warn "Gita is running ($($procs.Count) process(es), for example the Gita app or Claude Code's Gita connection)."
+    if (-not (Ask-YN 'Close them now? Save your work in Claude Code first.' $true)) {
+      Fail 'Gita is still running.' @('Close the Gita app and Claude Code, then run this again.')
     }
-    if ($Dry) { Note "[dry run] would add the Gita profile `"$Label`" for $Email"; return "<$Label>" }
-    $out = & $GitaCli profile add --name $Name --email $Email --label $Label --json | Out-String
-    if ($LASTEXITCODE -ne 0) { Fail "Couldn't add the Gita profile for $Email. $out" }
-    Note "Added the Gita profile `"$Label`" for $Email."
-    return ($out | ConvertFrom-Json).profile.id
+    $procs | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
   }
 
-  function Ensure-SignIn([string]$Id, [string]$Email) {
-    if ($env:TB_SKIP_SIGNIN -eq '1') { Warn "Skipping GitHub sign-in for $Email."; return }
-    $p = @(Get-Profiles | Where-Object { $_.id -eq $Id })
-    if ($p.Count -gt 0 -and $p[0].signedIn) { Note "$Email is already signed in to GitHub."; return }
-    Say "Sign in to GitHub with the account for $Email"
-    Note 'A code is shown below. Enter it on github.com, signed in as the account for this email.'
-    Note 'If the browser is signed in to your other account, sign out there first.'
-    Run "sign in $Email to GitHub" { & $GitaCli sign-in --profile $Id }
+  # Gets the Gita release (or the local zip) into <temp>\app and checks it.
+  function Get-Gita {
+    $zip = Join-Path $S.Tmp $GitaAsset
+    if ($env:TB_GITA_ZIP) {
+      Warn "Using the local file $env:TB_GITA_ZIP (no checksum check)."
+      Copy-Item -LiteralPath $env:TB_GITA_ZIP $zip
+    } else {
+      if (-not $GitaSha256) { Fail "Gita $GitaVersion has no pinned checksum in this script yet." @('Ask an admin.') }
+      $url = "https://github.com/$GitaRepo/releases/download/v$GitaVersion/$GitaAsset"
+      Note "Downloading $url"
+      Get-WithRetry $url $zip 'Gita'
+      if ((Get-Sha256 $zip) -ne $GitaSha256.ToLowerInvariant()) {
+        Fail "The Gita download doesn't match its pinned checksum." @('Nothing was installed. Tell an admin.')
+      }
+      Note 'Checksum OK.'
+    }
+    $app = Join-Path $S.Tmp 'app'
+    try { Expand-Archive -Path $zip -DestinationPath $app }
+    catch { Fail "Couldn't unpack the Gita download: $($_.Exception.Message)" @('Run this again; if it repeats, tell an admin.') }
+    if (-not (Test-Path (Join-Path $app 'cli\bin\gita.exe'))) { Fail 'The Gita download has no cli\bin\gita.exe.' @('Tell an admin.') }
+    return $app
   }
 
-  # ---- Optional: Figma MCP Bridge (see the README) ----
+  function Install-Gita([string]$Unpacked) {
+    Say "Installing Gita $GitaVersion"
+    Close-Gita
+    try {
+      if (Test-Path -LiteralPath $GitaAppDir) { Remove-Item -LiteralPath $GitaAppDir -Recurse -Force }
+      New-Item -ItemType Directory -Path (Split-Path $GitaAppDir) -Force | Out-Null
+      Move-Item -LiteralPath $Unpacked $GitaAppDir
+      # Same layout the Gita app keeps: ~/.gita/bin and ~/.gita/lib. Git runs
+      # the credential helper from here, so this path must not change.
+      # Delete first, then copy, so no old file is left behind. Only bin and
+      # lib are replaced; profiles and settings in ~/.gita stay.
+      foreach ($d in 'bin', 'lib') {
+        $dst = Join-Path $GitaHome $d
+        if (Test-Path -LiteralPath $dst) { Remove-Item -LiteralPath $dst -Recurse -Force }
+        $src = Join-Path $GitaAppDir "cli\$d"
+        if (-not (Test-Path -LiteralPath $src)) { continue }
+        New-Item -ItemType Directory -Path $dst -Force | Out-Null
+        Copy-Item (Join-Path $src '*') $dst -Recurse -Force
+      }
+    } catch {
+      Fail "Couldn't replace the Gita files: $($_.Exception.Message)" @('Close the Gita app and Claude Code (or restart Windows), then run this again.')
+    }
+    # Start menu shortcut to the Gita app. Nice to have, so never fatal.
+    try {
+      $programs = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
+      New-Item -ItemType Directory -Path $programs -Force | Out-Null
+      $lnk = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $programs 'Gita.lnk'))
+      $lnk.TargetPath = Join-Path $GitaAppDir 'gita.exe'
+      $lnk.WorkingDirectory = $GitaAppDir
+      $lnk.Save()
+    } catch { Warn "Couldn't add Gita to the Start menu: $($_.Exception.Message)" }
+  }
 
-  # TB_FIGMA answers up front; otherwise ask. No terminal to ask in means no.
+  function Test-Gita {
+    $st = Get-GitaState
+    if ($st -eq 'ok') { Note "Gita $GitaVersion is installed and runs."; return }
+    if ($st -like 'older:*' -or $st -like 'newer:*') {
+      $v = $st.Substring($st.IndexOf(':') + 1)
+      # A local test build may carry another version number.
+      if (-not $env:TB_GITA_ZIP) { Fail "Gita was installed but reports version $v instead of $GitaVersion." @('Tell an admin.') }
+      Warn "The local file holds Gita $v, not $GitaVersion."; return
+    }
+    if ($st -like 'broken:*') {
+      Fail "Gita was installed but doesn't run: $(Broken-Reason $st.Substring(7))." @("Run `"$GitaCli --version`" to see the error, and send it with the log to an admin.")
+    }
+    Fail "Gita was installed but $GitaCli is missing." @('Tell an admin.')
+  }
+
+  # Returns the gita.exe to run: the installed one, or in a dry run the
+  # downloaded copy in the temporary folder (a dry run installs nothing).
+  function Use-Gita {
+    Say 'Gita'
+    $st = Get-GitaState
+    if (-not $env:TB_GITA_ZIP) {
+      if ($st -eq 'ok') { Note "Gita $GitaVersion is installed and runs."; return $GitaCli }
+      if ($st -like 'newer:*') { Note "Gita $($st.Substring(6)) is newer than this script's $GitaVersion; keeping it."; return $GitaCli }
+    }
+    if ($st -like 'older:*') { Note "Gita $($st.Substring(6)) is installed. Updating to $GitaVersion." }
+    if ($st -like 'broken:*') { Warn "Gita is installed but doesn't run: $(Broken-Reason $st.Substring(7)). Reinstalling it." }
+    $app = Get-Gita
+    if ($Dry) {
+      Note "[dry run] would install Gita $GitaVersion into $GitaAppDir and $GitaHome"
+      return (Join-Path $app 'cli\bin\gita.exe')
+    }
+    Install-Gita $app
+    Test-Gita
+    return $GitaCli
+  }
+
+  function Get-OnboardingFile {
+    $file = Join-Path $S.Tmp 'thoughtbox-onboarding.json'
+    if ($env:TB_ONBOARDING_FILE) {
+      Warn "Using the local onboarding file $env:TB_ONBOARDING_FILE (no checksum check)."
+      try { Copy-Item -LiteralPath $env:TB_ONBOARDING_FILE $file } catch { Fail "Couldn't read $env:TB_ONBOARDING_FILE." }
+      return $file
+    }
+    Get-WithRetry $OnboardingUrl $file 'the onboarding file'
+    if ((Get-Sha256 $file) -ne $OnboardingSha256) {
+      Fail "The onboarding file doesn't match its pinned checksum." @('Nothing was changed by it. Tell an admin.')
+    }
+    return $file
+  }
+
+  # Runs "gita onboard" and keeps its exit code in $S.Code. Gita only asks
+  # questions when its input and output are a console, so with one it writes
+  # straight to it (this function's output must not be captured for that).
+  function Invoke-Onboard([string]$Gita, [string]$File) {
+    $ga = @('onboard', $File)
+    if ($env:TB_NAME) { $ga += @('--name', $env:TB_NAME) }
+    if ($env:TB_EMAIL_IO) { $ga += @('--email', "io=$env:TB_EMAIL_IO") }
+    if ($env:TB_EMAIL_ONE) { $ga += @('--email', "one=$env:TB_EMAIL_ONE") }
+    if ($Dry) { $ga += '--dry-run' }
+    if ($env:TB_CLEAN -eq '1') { $ga += '--clean' }
+    if ($env:TB_SKIP_SIGNIN -eq '1') { $ga += '--skip-sign-in' }
+    if ($env:TB_SKIP_STANDARDS -eq '1') { $ga += '--skip-repos' }
+    Write-Host ''
+    $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    try {
+      if ($Interactive -and -not [Console]::IsOutputRedirected) {
+        Note "(Gita's own output is shown in the console only, so it can ask you questions.)"
+        & $Gita @ga
+      } else {
+        & $Gita @ga 2>&1 | ForEach-Object { Write-Host "$_" }
+      }
+      $S.Code = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $old }
+  }
+
+
+  # ------------------------------------------------------------ Figma (optional, see the README)
+
+  function Has([string]$Cmd) { [bool](Get-Command $Cmd -ErrorAction SilentlyContinue) }
+
+  # TB_FIGMA answers up front; otherwise ask. No console to ask in means no.
   function Want-Figma {
     if ($env:TB_FIGMA -eq '1') { return $true }
     if ($env:TB_FIGMA -eq '0') { return $false }
     if ($env:TB_FIGMA) { Warn "TB_FIGMA must be 1 or 0 (it is `"$env:TB_FIGMA`"), so the Figma step is skipped."; return $false }
-    $nonInteractive = [Environment]::GetCommandLineArgs() | Where-Object { $_ -like '-NonI*' }
-    if ([Console]::IsInputRedirected -or $nonInteractive) { return $false }
+    if (-not $Interactive) { return $false }
     $answer = "$(Read-Host 'Set up Figma for frontend work (Figma MCP Bridge)? [y/N]')".Trim().ToLowerInvariant()
     return ($answer -eq 'y' -or $answer -eq 'yes')
   }
@@ -166,7 +413,7 @@ function Install-ThoughtBoxDevSetup {
 
   function Get-NodeMajor {
     if (-not (Has 'node')) { return 0 }
-    $v = "$(node --version 2>$null)".Trim()
+    $v = "$(Invoke-Native { node --version })".Trim()
     if ($v -match '^v(\d+)\.') { return [int]$Matches[1] }
     return 0
   }
@@ -177,21 +424,69 @@ function Install-ThoughtBoxDevSetup {
       Where-Object { $_.CommandLine -and $_.CommandLine -like "*$FigmaDir*" })
   }
 
+  function Install-FigmaFiles {
+    if (@(Get-BridgeProcesses).Count -gt 0) {
+      Fail 'The Figma bridge is running.' @('Close Claude Code (and any other AI tool using it), then run this again.')
+    }
+    $work = Join-Path $S.Tmp 'figma'
+    New-Item -ItemType Directory -Path $work -Force | Out-Null
+
+    # npm.cmd, not npm: npm.ps1 can be blocked by the execution policy.
+    Note "Downloading @gethopp/figma-mcp-bridge@$FigmaVersion from npm"
+    Invoke-Native { npm.cmd pack "@gethopp/figma-mcp-bridge@$FigmaVersion" --pack-destination $work --silent } | Out-Null
+    if ($LASTEXITCODE -ne 0) { Fail "Couldn't download the bridge server from npm." }
+    $tgz = @(Get-ChildItem $work -Filter '*.tgz')
+    if ($tgz.Count -ne 1) { Fail "npm didn't produce the bridge server package." }
+    $actual = (Get-FileHash -LiteralPath $tgz[0].FullName -Algorithm SHA512).Hash.ToLowerInvariant()
+    if ($actual -ne $FigmaNpmSha512) {
+      Fail "The bridge server download doesn't match its pinned checksum." @('Nothing was installed. Tell an admin.')
+    }
+
+    $zip = Join-Path $work 'plugin.zip'
+    $url = "https://github.com/gethopp/figma-mcp-bridge/releases/download/v$FigmaVersion/figma-mcp-bridge-v$FigmaVersion.zip"
+    Note "Downloading $url"
+    Get-WithRetry $url $zip 'the Figma plugin'
+    if ((Get-Sha256 $zip) -ne $FigmaPluginSha256) {
+      Fail "The Figma plugin download doesn't match its pinned checksum." @('Nothing was installed. Tell an admin.')
+    }
+    Note 'Checksums OK.'
+
+    # Build the new copy next to the downloads, then swap it in.
+    $stage = Join-Path $work 'bridge'
+    $server = Join-Path $stage 'server'
+    New-Item -ItemType Directory -Path $server -Force | Out-Null
+    Invoke-Native { npm.cmd install --prefix $server $tgz[0].FullName --ignore-scripts --omit=dev --no-audit --no-fund --silent } | Out-Null
+    if ($LASTEXITCODE -ne 0) { Fail "Couldn't install the bridge server's packages with npm." }
+    Expand-Archive -Path $zip -DestinationPath (Join-Path $work 'zip')
+    $plugin = Join-Path $work 'zip\plugin'
+    if (-not (Test-Path (Join-Path $plugin 'manifest.json'))) { Fail 'The Figma plugin download has no plugin\manifest.json.' }
+    Move-Item $plugin (Join-Path $stage 'plugin')
+    Set-Content -Path (Join-Path $stage 'version') -Value $FigmaVersion -Encoding ascii
+
+    if (Test-Path $FigmaDir) { Remove-Item $FigmaDir -Recurse -Force }
+    New-Item -ItemType Directory -Path (Split-Path $FigmaDir) -Force | Out-Null
+    Move-Item $stage $FigmaDir
+    Note "Installed Figma MCP Bridge $FigmaVersion."
+  }
+
   # Throws (with "Setup stopped:") on a problem; the caller turns that into a warning.
   function Install-FigmaBridge {
-    if (-not (Has 'winget')) { Fail 'winget is needed for this step. Install "App Installer" from the Microsoft Store.' }
+    if (-not (Has 'winget')) { Fail 'winget is needed for this step.' @('Install "App Installer" from the Microsoft Store.') }
 
     # Node.js runs the bridge server (it needs 20 or later).
     if ((Get-NodeMajor) -ge 20) {
-      Note "Node.js $(node --version) is installed."
+      Note "Node.js $("$(Invoke-Native { node --version })".Trim()) is installed."
     } else {
       Say 'Installing Node.js LTS'
-      Run 'install Node.js LTS' {
-        winget install --id OpenJS.NodeJS.LTS --exact --source winget --silent --accept-package-agreements --accept-source-agreements
-      }
-      Update-SessionPath
-      if (-not $Dry -and (Get-NodeMajor) -lt 20) {
-        Fail 'Node.js 20 or later is needed, but "node --version" still shows an older one (or none). Remove the old Node.js (or switch with your version manager) and run this again.'
+      if ($Dry) {
+        Note '[dry run] would install Node.js LTS with winget'
+      } else {
+        Invoke-Native { winget install --id OpenJS.NodeJS.LTS --exact --source winget --silent --accept-package-agreements --accept-source-agreements }
+        if ($LASTEXITCODE -ne 0) { Fail 'Installing Node.js LTS with winget failed.' }
+        Update-SessionPath
+        if ((Get-NodeMajor) -lt 20) {
+          Fail 'Node.js 20 or later is needed, but "node --version" still shows an older one (or none).' @('Remove the old Node.js (or switch with your version manager) and run this again.')
+        }
       }
     }
 
@@ -201,9 +496,9 @@ function Install-ThoughtBoxDevSetup {
     } else {
       Say 'Installing the Figma desktop app'
       if ($Dry) {
-        Note '[dry run] would install the Figma desktop app'
+        Note '[dry run] would install the Figma desktop app with winget'
       } else {
-        winget install --id Figma.Figma --exact --source winget --silent --accept-package-agreements --accept-source-agreements
+        Invoke-Native { winget install --id Figma.Figma --exact --source winget --silent --accept-package-agreements --accept-source-agreements }
         if ($LASTEXITCODE -ne 0) { Warn 'The Figma desktop app was not installed. Get it from https://www.figma.com/downloads/.' }
       }
     }
@@ -217,56 +512,7 @@ function Install-ThoughtBoxDevSetup {
       Note "Figma MCP Bridge $FigmaVersion is installed."
     } else {
       Say "Installing Figma MCP Bridge $FigmaVersion"
-      Change "download and install Figma MCP Bridge into $FigmaDir" {
-        if (@(Get-BridgeProcesses).Count -gt 0) {
-          Fail 'The Figma bridge is running. Close Claude Code (and any other AI tool using it), then run this again.'
-        }
-        $work = Join-Path ([IO.Path]::GetTempPath()) ("tb-figma-" + [guid]::NewGuid())
-        New-Item -ItemType Directory -Path $work | Out-Null
-        try {
-          $ProgressPreference = 'SilentlyContinue'
-
-          # npm.cmd, not npm: npm.ps1 can be blocked by the execution policy.
-          Note "Downloading @gethopp/figma-mcp-bridge@$FigmaVersion from npm"
-          Invoke-Native { npm.cmd pack "@gethopp/figma-mcp-bridge@$FigmaVersion" --pack-destination $work --silent } | Out-Null
-          if ($LASTEXITCODE -ne 0) { Fail "Couldn't download the bridge server from npm." }
-          $tgz = @(Get-ChildItem $work -Filter '*.tgz')
-          if ($tgz.Count -ne 1) { Fail "npm didn't produce the bridge server package." }
-          $actual = (Get-FileHash $tgz[0].FullName -Algorithm SHA512).Hash
-          if ($actual -ne $FigmaNpmSha512.ToUpperInvariant()) {
-            Fail "The bridge server download doesn't match its pinned checksum. Nothing was installed. Tell an admin."
-          }
-
-          $zip = Join-Path $work 'plugin.zip'
-          $url = "https://github.com/gethopp/figma-mcp-bridge/releases/download/v$FigmaVersion/figma-mcp-bridge-v$FigmaVersion.zip"
-          Note "Downloading $url"
-          Get-Download $url $zip
-          $actual = (Get-FileHash $zip -Algorithm SHA256).Hash
-          if ($actual -ne $FigmaPluginSha256.ToUpperInvariant()) {
-            Fail "The Figma plugin download doesn't match its pinned checksum. Nothing was installed. Tell an admin."
-          }
-          Note 'Checksums OK.'
-
-          # Build the new copy next to the downloads, then swap it in.
-          $stage = Join-Path $work 'bridge'
-          $server = Join-Path $stage 'server'
-          New-Item -ItemType Directory -Path $server -Force | Out-Null
-          Invoke-Native { npm.cmd install --prefix $server $tgz[0].FullName --ignore-scripts --omit=dev --no-audit --no-fund --silent } | Out-Null
-          if ($LASTEXITCODE -ne 0) { Fail "Couldn't install the bridge server's packages with npm." }
-          Expand-Archive -Path $zip -DestinationPath (Join-Path $work 'zip')
-          $plugin = Join-Path $work 'zip\plugin'
-          if (-not (Test-Path (Join-Path $plugin 'manifest.json'))) { Fail 'The Figma plugin download has no plugin\manifest.json.' }
-          Move-Item $plugin (Join-Path $stage 'plugin')
-          Set-Content -Path (Join-Path $stage 'version') -Value $FigmaVersion -Encoding ascii
-
-          if (Test-Path $FigmaDir) { Remove-Item $FigmaDir -Recurse -Force }
-          New-Item -ItemType Directory -Path (Split-Path $FigmaDir) -Force | Out-Null
-          Move-Item $stage $FigmaDir
-        } finally {
-          Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
-        }
-        Note "Installed Figma MCP Bridge $FigmaVersion."
-      }
+      if ($Dry) { Note "[dry run] would download and install Figma MCP Bridge into $FigmaDir" } else { Install-FigmaFiles }
     }
 
     # Claude Code entry. run_script is on by team decision (CR-0.1.0-02, D5).
@@ -289,194 +535,77 @@ function Install-ThoughtBoxDevSetup {
     Note 'Added figma-bridge to Claude Code.'
   }
 
-  # ---- 1. Prerequisites ----
-  Say 'Checking prerequisites'
-  if ([Environment]::OSVersion.Version.Major -lt 10) { Fail 'Windows 10 or later is needed.' }
-  [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-  Update-SessionPath
+  # ------------------------------------------------------------ run
 
-  $winget = @(
-    @{ Cmd = 'git'; Id = 'Git.Git'; Name = 'Git for Windows' },
-    @{ Cmd = 'gh'; Id = 'GitHub.cli'; Name = 'GitHub CLI' }
-  )
-  foreach ($w in $winget) {
-    if (Has $w.Cmd) { Note "$($w.Name) is installed."; continue }
-    if (-not (Has 'winget')) {
-      Fail "$($w.Name) is missing and winget isn't available. Install `"App Installer`" from the Microsoft Store, then run this again."
-    }
-    Say "Installing $($w.Name)"
-    Run "install $($w.Name)" {
-      winget install --id $w.Id --exact --source winget --silent --accept-package-agreements --accept-source-agreements
-    }
+  Start-Log
+  $code = 0
+  try {
+    if ([Environment]::OSVersion.Version.Major -lt 10) { Fail 'Windows 10 or later is needed.' }
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     Update-SessionPath
-  }
+    # A run that was killed can't reach its "finally"; clear what earlier runs left.
+    Get-ChildItem ([IO.Path]::GetTempPath()) -Directory -Filter 'tb-gita-*' -ErrorAction SilentlyContinue |
+      Where-Object { $_.LastWriteTime -lt (Get-Date).AddHours(-1) } |
+      Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    $S.Tmp = Join-Path ([IO.Path]::GetTempPath()) ('tb-gita-' + [guid]::NewGuid())
+    New-Item -ItemType Directory -Path $S.Tmp | Out-Null
 
-  if (Has 'claude') {
-    Note 'Claude Code is installed.'
-  } else {
-    Say 'Installing Claude Code'
-    Change 'install Claude Code (official installer from claude.ai)' {
-      Invoke-RestMethod https://claude.ai/install.ps1 | Invoke-Expression
-    }
+    $gita = Use-Gita
+    Set-GitaFirstInUserPath
+    Find-OtherGita
     Update-SessionPath
-  }
+    $file = Get-OnboardingFile
+    Invoke-Onboard $gita $file
+    $code = $S.Code
+    if ($code -ne 0) { Note "Gita stopped with exit code $code (see above)." }
 
-  # ---- 2. Gita ----
-  $installed = ''
-  if (Test-Path $GitaCli) { $installed = "$(& $GitaCli --version 2>$null)".Trim() }
-  if ($installed -eq "gita $GitaVersion" -and -not $env:TB_GITA_ZIP) {
-    Note "Gita $GitaVersion is installed."
-  } else {
-    Say "Installing Gita $GitaVersion"
-    $work = Join-Path ([IO.Path]::GetTempPath()) ("tb-gita-" + [guid]::NewGuid())
-    Change "download and install Gita into $GitaAppDir" {
-      New-Item -ItemType Directory -Path $work | Out-Null
+    # ---- Optional: Figma for frontend work (after a finished onboarding) ----
+    if ($code -eq 0 -and (Want-Figma)) {
+      Write-Host ''
+      Say 'Setting up Figma for frontend work'
       try {
-        $zip = Join-Path $work $GitaAsset
-        if ($env:TB_GITA_ZIP) {
-          Warn "Using the local file $env:TB_GITA_ZIP (no checksum check)."
-          Copy-Item $env:TB_GITA_ZIP $zip
-        } else {
-          if (-not $GitaSha256) { Fail "Gita $GitaVersion has no pinned checksum in this script yet. Ask an admin." }
-          $url = "https://github.com/$GitaRepo/releases/download/v$GitaVersion/$GitaAsset"
-          Note "Downloading $url"
-          $ProgressPreference = 'SilentlyContinue'
-          Get-Download $url $zip
-          $actual = (Get-FileHash $zip -Algorithm SHA256).Hash
-          if ($actual -ne $GitaSha256.ToUpperInvariant()) {
-            Fail "The Gita download doesn't match its pinned checksum (got $actual). Nothing was installed. Tell an admin."
-          }
-          Note 'Checksum OK.'
+        Install-FigmaBridge
+        if (-not $Dry) {
+          Record 'Figma, once: open the Figma desktop app, then Plugins > Development >'
+          Record '  Import plugin from manifest... and pick:'
+          Record "    $(Join-Path $FigmaDir 'plugin\manifest.json')"
+          Record '  Then open the shared Figma file, run "Figma MCP Bridge" from'
+          Record '  Plugins > Development, and start (or restart) claude.'
         }
-        $unpacked = Join-Path $work 'app'
-        Expand-Archive -Path $zip -DestinationPath $unpacked
-        if (-not (Test-Path (Join-Path $unpacked 'cli\bin\gita.exe'))) { Fail 'The Gita download has no cli\bin\gita.exe.' }
-
-        Get-Process gita -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$GitaAppDir*" } |
-          ForEach-Object { Fail 'Gita is open. Close it and run this again.' }
-        if (Test-Path $GitaAppDir) { Remove-Item $GitaAppDir -Recurse -Force }
-        New-Item -ItemType Directory -Path (Split-Path $GitaAppDir) -Force | Out-Null
-        Move-Item $unpacked $GitaAppDir
-
-        # Same layout the Gita app keeps: ~/.gita/bin and ~/.gita/lib. Git runs
-        # the credential helper from here, so this path must not change.
-        foreach ($d in 'bin', 'lib') {
-          $src = Join-Path $GitaAppDir "cli\$d"
-          if (-not (Test-Path $src)) { continue }
-          $dst = Join-Path $GitaHome $d
-          New-Item -ItemType Directory -Path $dst -Force | Out-Null
-          Copy-Item (Join-Path $src '*') $dst -Recurse -Force
-        }
-
-        # Start menu shortcut to the Gita app. Nice to have, so never fatal.
-        try {
-          $programs = [Environment]::GetFolderPath('Programs')
-          if ($programs) {
-            $lnk = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $programs 'Gita.lnk'))
-            $lnk.TargetPath = Join-Path $GitaAppDir 'gita.exe'
-            $lnk.WorkingDirectory = $GitaAppDir
-            $lnk.Save()
-          }
-        } catch { Warn "Couldn't add Gita to the Start menu: $($_.Exception.Message)" }
-      } finally {
-        Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
-      }
-      Note "Installed $(& $GitaCli --version)."
-    }
-  }
-  Add-UserPath (Join-Path $GitaHome 'bin')
-  Update-SessionPath
-
-  # ---- 3. Your accounts ----
-  Say 'Your GitHub accounts'
-  $defaultName = ''
-  if (Has 'git') { $defaultName = "$(git config --global user.name 2>$null)".Trim() }
-  $name = Ask 'Your full name (shown on commits)' $defaultName $env:TB_NAME
-  if (-not $name) { Fail 'A name is needed.' }
-  $emailIo = Ask-Email 'Your @thoughtbox.io email (projects in thoughtboxhub)' 'thoughtbox.io' $env:TB_EMAIL_IO
-  $emailOne = Ask-Email 'Your @thoughtbox.one email (projects in ThoughtBoxFinTechAI)' 'thoughtbox.one' $env:TB_EMAIL_ONE
-
-  $idIo = Ensure-Profile $name $emailIo $LabelIo
-  $idOne = Ensure-Profile $name $emailOne $LabelOne
-
-  # The AI account first: claude-standards lives in its organization.
-  Ensure-SignIn $idOne $emailOne
-
-  # ---- 4. claude-standards and the company files ----
-  if ($env:TB_SKIP_STANDARDS -eq '1') {
-    Warn 'Skipping claude-standards.'
-  } else {
-    if (Test-Path (Join-Path $StandardsDir '.git')) {
-      Note "claude-standards is already in $StandardsDir."
-    } else {
-      Say 'Downloading claude-standards'
-      Run "clone claude-standards into $StandardsDir" {
-        & $GitaCli clone $StandardsUrl $StandardsDir --profile $idOne
+      } catch {
+        # Optional step: say what went wrong; the rest of the setup is done.
+        Warn "The Figma step didn't finish: $($_.Exception.Message -replace '^Setup stopped: ', '')"
+        Warn 'Everything else is set up. Fix that and run the setup again with TB_FIGMA=1.'
       }
     }
-    Say 'Telling Gita which organization uses which account'
-    Run 'import gita/thoughtbox.json' {
-      & $GitaCli company import (Join-Path $StandardsDir 'gita\thoughtbox.json') --profile $idIo
-    }
-    Run 'import gita/thoughtbox-ai.json' {
-      & $GitaCli company import (Join-Path $StandardsDir 'gita\thoughtbox-ai.json') --profile $idOne
-    }
+  } catch {
+    $code = 1
+    Write-Host ''
+    $msg = $_.Exception.Message
+    if ($msg -notlike 'Setup stopped:*') { $msg = "Setup stopped: $msg" }   # an unexpected error
+    Write-Host $msg -ForegroundColor Red
+    Note 'Fix the problem above and run the same command again.'
+  } finally {
+    if ($S.Tmp) { Remove-Item -LiteralPath $S.Tmp -Recurse -Force -ErrorAction SilentlyContinue }
   }
-
-  Ensure-SignIn $idIo $emailIo
-
-  # ---- 5. Claude Code ----
-  if ($env:TB_SKIP_STANDARDS -ne '1') {
-    Say 'Setting up Claude Code with the company standards'
-    Run 'run the claude-standards setup' {
-      powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $StandardsDir 'setup.ps1')
-    }
+  if ($code -ne 0) {
+    # No "exit" here: under "irm | iex" it would close the developer's terminal.
+    # The script-level code below exits only when this runs as a .ps1 file.
+    $global:LASTEXITCODE = $code
+    $script:TbSetupExit = $code
   }
-  if ($env:TB_SKIP_STANDARDS -eq '1') {
-  } elseif (Has 'claude') {
-    Run 'connect Gita to Claude Code' { & $GitaCli mcp add-to-claude }
-  } else {
-    Warn 'Claude Code is not on PATH yet, so Gita was not connected to it. Run "gita mcp add-to-claude" later.'
+  if ($S.Notes.Count -gt 0) {
+    Say 'From the setup script'
+    foreach ($n in $S.Notes) { Note $n }
   }
-
-  # ---- 6. Optional: Figma for frontend work ----
-  $figma = 'no'
-  if (Want-Figma) {
-    Say 'Setting up Figma for frontend work'
-    try {
-      Install-FigmaBridge
-      $figma = 'yes'
-    } catch {
-      # Optional step: say what went wrong and finish the rest of the setup.
-      Warn "The Figma step didn't finish: $($_.Exception.Message -replace '^Setup stopped: ', '')"
-      Warn 'Everything else is set up. Fix that and run the setup again with TB_FIGMA=1.'
-      $figma = 'failed'
-    }
-  }
-
-  # ---- 7. Check ----
-  Say 'Checking the setup'
-  if (-not $Dry) { & $GitaCli doctor }
-
-  Write-Host ''
-  Say 'Done.'
-  Note 'Next:'
-  Note '  1. Open a new terminal (so PATH changes apply).'
-  Note '  2. Run "claude" and sign in with your company Claude Teams seat.'
-  Note '  3. Clone projects with "gita clone <address>", so each uses the right account.'
-  if ($figma -eq 'yes') {
-    Note '  4. Figma, once: open the Figma desktop app, then Plugins > Development >'
-    Note '     Import plugin from manifest... and pick:'
-    Note "       $(Join-Path $FigmaDir 'plugin\manifest.json')"
-    Note '     Then open the shared Figma file, run "Figma MCP Bridge" from'
-    Note '     Plugins > Development, and start (or restart) claude.'
+  if ($S.Log) {
+    Note "Log of this run: $($S.Log) (send it when asking for help)."
+    try { Stop-Transcript | Out-Null } catch { }
   }
 }
 
-try {
-  Install-ThoughtBoxDevSetup
-} catch {
-  Write-Host ''
-  Write-Host $_.Exception.Message -ForegroundColor Red
-  Write-Host 'Fix the problem above and run the same command again. Finished steps are skipped.'
-}
+$script:TbSetupExit = 0
+Install-ThoughtBoxDevSetup
+# "powershell -File install.ps1" reports only an explicit exit code, so a failed run must
+# exit with it there. Under "irm | iex" there is no script path and no exit (see above).
+if ($script:TbSetupExit -ne 0 -and $MyInvocation.MyCommand.Path) { exit $script:TbSetupExit }

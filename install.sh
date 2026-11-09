@@ -3,16 +3,22 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/ThoughtBoxFinTechAI/dev-setup/main/install.sh | bash
 #
-# Installs Git, GitHub CLI, Claude Code and Gita, sets up your two GitHub
-# accounts (@thoughtbox.io and @thoughtbox.one), clones claude-standards and
-# runs its setup. Safe to run again: steps that are already done are skipped.
+# Installs or updates Gita (a pinned release, checked against its SHA-256),
+# downloads the ThoughtBox onboarding file (also checked), and runs
+# "gita onboard" with it. Gita does the rest: Git, GitHub CLI and Claude Code,
+# clean-up of old GitHub sign-ins, your two GitHub accounts (@thoughtbox.io and
+# @thoughtbox.one), claude-standards and its setup, Gita in Claude Code, and a
+# final check with a summary. Safe to run again: finished steps are skipped.
 #
 # Optional environment variables (set them before running, e.g. TB_DRY_RUN=1 bash):
 #   TB_NAME, TB_EMAIL_IO, TB_EMAIL_ONE  answers to the questions, to skip them
 #   TB_DRY_RUN=1        print what would change, change nothing
-#   TB_GITA_ARCHIVE=<path>  install Gita from a local archive (testing, no checksum)
+#   TB_CLEAN=1          remove old GitHub sign-ins and settings without asking
+#   TB_LOG=<path>       write the log here instead of ~/.thoughtbox-setup.log
 #   TB_SKIP_SIGNIN=1    don't sign in to GitHub (testing)
-#   TB_SKIP_STANDARDS=1 skip claude-standards and the Claude Code setup (testing)
+#   TB_SKIP_STANDARDS=1 skip claude-standards and its setup (testing)
+#   TB_GITA_ARCHIVE=<path>     install Gita from a local archive (testing, no checksum)
+#   TB_ONBOARDING_FILE=<path>  use a local onboarding file (testing, no checksum)
 #   TB_FIGMA=1 / TB_FIGMA=0  set up the Figma MCP Bridge for frontend work (macOS),
 #                       or skip it, without being asked (default: ask; no terminal = skip)
 
@@ -20,11 +26,14 @@
 main() {
   set -euo pipefail
 
-  # ---- Pinned versions. Update with every Gita release (see README). ----
+  # ---- Pinned versions. The gita-bump workflow updates these lines. ----
   local GITA_REPO="naseebnaushad/gita"
-  local GITA_VERSION="1.0.2"
-  local GITA_SHA256_MACOS="49b6a17a0920e66ccadc2a26b7caa241f7ce0ecdf28cd8d9f8f91b077e6b01d7"   # SHA-256 of gita-macos.zip
-  local GITA_SHA256_LINUX="f7736ddc106d0293b1feaeb3494c0ba3645b9ebec5b0ef2cfc1cc0c501122cdc"   # SHA-256 of gita-linux-x64.tar.gz
+  local GITA_VERSION="1.1.0"
+  # Checksums: filled in by the gita-bump workflow PR.
+  local GITA_SHA256_MACOS="6d8815056bf654da30ef0b202367d705fc8b0d96bf82d22d7dcb435961d1093f"   # SHA-256 of gita-macos.zip
+  local GITA_SHA256_LINUX="51e2142c3069985259d72da31b8dbc91a8a5bc80a9b53689074207ff3d24e616"   # SHA-256 of gita-linux-x64.tar.gz
+  local ONBOARDING_URL="https://raw.githubusercontent.com/ThoughtBoxFinTechAI/dev-setup/main/thoughtbox-onboarding.json"
+  local ONBOARDING_SHA256="a723840dd6b09911fea6b1afa42cfe641c21deb161d0cb66e3e9e6bf1431a196"
 
   # ---- Pinned Figma MCP Bridge (optional step). Update together (see README). ----
   local FIGMA_VERSION="0.0.25"
@@ -32,19 +41,21 @@ main() {
   local FIGMA_PLUGIN_SHA256="bf50a9ce330193bceb916c0eeb7252ce72a696f92a3369528139b6a4376d8550"   # SHA-256 of the release zip
   local FIGMA_DIR="$HOME/.thoughtbox/figma-mcp-bridge"
 
-  local STANDARDS_URL="https://github.com/ThoughtBoxFinTechAI/claude-standards.git"
-  local STANDARDS_DIR="$HOME/claude-standards"
   local GITA_HOME="$HOME/.gita"
   local GITA_CLI="$GITA_HOME/bin/gita"
-  local LABEL_IO="ThoughtBox"
-  local LABEL_ONE="ThoughtBox AI"
   local DRY="${TB_DRY_RUN:-0}"
-
+  local ORIG_PATH="$PATH"
   export PATH="$GITA_HOME/bin:$HOME/.local/bin:$PATH"
 
-  # Questions and sign-in read from the terminal, not from the piped script.
+  # Gita asks its questions on the terminal, not on the piped script.
   local TTY=/dev/tty
   if ! { : <"$TTY"; } 2>/dev/null; then TTY=/dev/null; fi
+
+  start_log
+  trap on_exit EXIT
+  # A run that was killed can't clean up; remove what earlier runs left.
+  find "${TMPDIR:-/tmp}" -maxdepth 1 -type d -name 'tb-gita.*' -user "$(id -u)" -mmin +60     -exec rm -rf {} + 2>/dev/null || true
+  TB_TMP=$(mktemp -d "${TMPDIR:-/tmp}/tb-gita.XXXXXX") || fail "Couldn't create a temporary folder."
 
   local os asset sha app_dir cli_dir
   case "$(uname -s)" in
@@ -52,284 +63,260 @@ main() {
       # hw.optional.arm64, not uname -m, which says x86_64 under Rosetta.
       [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ] ||
         fail "Gita's gita command is only built for Apple silicon Macs (M1 or later); this Mac has an Intel processor."
-      os=macos; asset=gita-macos.zip; sha=$GITA_SHA256_MACOS
+      os=macos; asset="gita-macos.zip"; sha=$GITA_SHA256_MACOS
       app_dir="$HOME/Applications/gita.app"; cli_dir="$app_dir/Contents/Resources/cli" ;;
     Linux)
       [ "$(uname -m)" = x86_64 ] || fail "Gita is only built for x86_64 Linux (this is $(uname -m))."
-      os=linux; asset=gita-linux-x64.tar.gz; sha=$GITA_SHA256_LINUX
+      os=linux; asset="gita-linux-x64.tar.gz"; sha=$GITA_SHA256_LINUX
       app_dir="$HOME/.local/share/gita"; cli_dir="$app_dir/cli" ;;
     *) fail "Unsupported system $(uname -s). On Windows, use install.ps1." ;;
   esac
 
-  # ---- 1. Prerequisites ----
-  say "Checking prerequisites"
-  install_packages
-
-  if has claude; then
-    note "Claude Code is installed."
-  else
-    say "Installing Claude Code"
-    change "install Claude Code (official installer from claude.ai)" \
-      bash -c 'curl -fsSL https://claude.ai/install.sh | bash'
-  fi
-
-  # ---- 2. Gita ----
-  local installed=""
-  [ -x "$GITA_CLI" ] && installed=$({ "$GITA_CLI" --version; } 2>/dev/null || true)
-  # The Mac app copies its own command over ~/.gita when it starts, so the
-  # copy inside gita.app has to run too (see fix_macos_cli_signature).
-  if [ "$os" = macos ] && ! { "$cli_dir/bin/gita" --version; } >/dev/null 2>&1; then
-    installed=""
-  fi
-  if [ "$installed" = "gita $GITA_VERSION" ] && [ -z "${TB_GITA_ARCHIVE:-}" ]; then
-    note "Gita $GITA_VERSION is installed."
-  else
-    say "Installing Gita $GITA_VERSION"
+  # ---- 1. Gita ----
+  say "Gita"
+  local gita="$GITA_CLI" st
+  st=$(gita_state)
+  case $st in
+    ok) [ -n "${TB_GITA_ARCHIVE:-}" ] || { note "Gita $GITA_VERSION is installed and runs."; st=keep; } ;;
+    newer:*)
+      [ -n "${TB_GITA_ARCHIVE:-}" ] ||
+        { note "Gita ${st#newer:} is newer than this script's $GITA_VERSION; keeping it."; st=keep; } ;;
+    older:*) note "Gita ${st#older:} is installed. Updating to $GITA_VERSION." ;;
+    broken:*) warn "Gita is installed but doesn't run: $(broken_reason "${st#broken:}"). Reinstalling it." ;;
+  esac
+  if [ "$st" != keep ]; then
+    fetch_gita
     if [ "$DRY" = 1 ]; then
-      note "[dry run] would download and install Gita into $app_dir"
+      # A dry run installs nothing: it runs the downloaded copy from the temporary folder.
+      note "[dry run] would install Gita $GITA_VERSION into $app_dir and $GITA_HOME"
+      if [ "$os" = macos ]; then gita="$TB_TMP/app/gita.app/Contents/Resources/cli/bin/gita"
+      else gita="$TB_TMP/app/cli/bin/gita"; fi
     else
-      install_gita
+      wait_for_gita_closed
+      place_gita
+      verify_gita
     fi
   fi
-  add_to_path "$GITA_HOME/bin"
+  fix_rc_path
+  check_other_gita
 
-  # ---- 3. Your accounts ----
-  say "Your GitHub accounts"
-  local default_name name email_io email_one id_io id_one
-  default_name=$(git config --global user.name 2>/dev/null || true)
-  name=$(ask "Your full name (shown on commits)" "$default_name" "${TB_NAME:-}")
-  [ -n "$name" ] || fail "A name is needed."
-  email_io=$(ask_email "Your @thoughtbox.io email (projects in thoughtboxhub)" thoughtbox.io "${TB_EMAIL_IO:-}")
-  email_one=$(ask_email "Your @thoughtbox.one email (projects in ThoughtBoxFinTechAI)" thoughtbox.one "${TB_EMAIL_ONE:-}")
-
-  id_io=$(ensure_profile "$name" "$email_io" "$LABEL_IO")
-  id_one=$(ensure_profile "$name" "$email_one" "$LABEL_ONE")
-
-  # The AI account first: claude-standards lives in its organization.
-  ensure_signin "$id_one" "$email_one"
-
-  # ---- 4. claude-standards and the company files ----
-  if [ "${TB_SKIP_STANDARDS:-0}" = 1 ]; then
-    warn "Skipping claude-standards."
+  # ---- 2. The onboarding file ----
+  local file="$TB_TMP/thoughtbox-onboarding.json"
+  if [ -n "${TB_ONBOARDING_FILE:-}" ]; then
+    warn "Using the local onboarding file $TB_ONBOARDING_FILE (no checksum check)."
+    cp "$TB_ONBOARDING_FILE" "$file" || fail "Couldn't read $TB_ONBOARDING_FILE."
   else
-    if [ -d "$STANDARDS_DIR/.git" ]; then
-      note "claude-standards is already in $STANDARDS_DIR."
-    else
-      say "Downloading claude-standards"
-      change "clone claude-standards into $STANDARDS_DIR" \
-        "$GITA_CLI" clone "$STANDARDS_URL" "$STANDARDS_DIR" --profile "$id_one"
-    fi
-    say "Telling Gita which organization uses which account"
-    change "import gita/thoughtbox.json" \
-      "$GITA_CLI" company import "$STANDARDS_DIR/gita/thoughtbox.json" --profile "$id_io"
-    change "import gita/thoughtbox-ai.json" \
-      "$GITA_CLI" company import "$STANDARDS_DIR/gita/thoughtbox-ai.json" --profile "$id_one"
+    download "$ONBOARDING_URL" "$file" ||
+      fail "Couldn't download the onboarding file." "Check your internet connection and that github.com opens in your browser, then run this again."
+    [ "$(sha256_of "$file")" = "$ONBOARDING_SHA256" ] ||
+      fail "The onboarding file doesn't match its pinned checksum." "Nothing was changed by it. Tell an admin."
   fi
 
-  ensure_signin "$id_io" "$email_io"
-
-  # ---- 5. Claude Code ----
-  if [ "${TB_SKIP_STANDARDS:-0}" != 1 ]; then
-    say "Setting up Claude Code with the company standards"
-    # No terminal input: it asks nothing, and "claude plugin" crashes when its
-    # input is /dev/tty (Bun on macOS: "EINVAL: invalid argument, kqueue").
-    TTY=/dev/null change "run the claude-standards setup" bash "$STANDARDS_DIR/setup.sh"
-  fi
-  if [ "${TB_SKIP_STANDARDS:-0}" = 1 ]; then
-    :
-  elif has claude; then
-    change "connect Gita to Claude Code" "$GITA_CLI" mcp add-to-claude
+  # ---- 3. gita onboard does the rest ----
+  local args=(onboard "$file")
+  [ -z "${TB_NAME:-}" ] || args+=(--name "$TB_NAME")
+  [ -z "${TB_EMAIL_IO:-}" ] || args+=(--email "io=$TB_EMAIL_IO")
+  [ -z "${TB_EMAIL_ONE:-}" ] || args+=(--email "one=$TB_EMAIL_ONE")
+  [ "$DRY" != 1 ] || args+=(--dry-run)
+  [ "${TB_CLEAN:-0}" != 1 ] || args+=(--clean)
+  [ "${TB_SKIP_SIGNIN:-0}" != 1 ] || args+=(--skip-sign-in)
+  [ "${TB_SKIP_STANDARDS:-0}" != 1 ] || args+=(--skip-repos)
+  echo >&2
+  local rc=0
+  TB_GITA_RAN=1
+  # Gita only asks questions when both its input and output are a terminal, so
+  # with a terminal it writes straight to it (the log can't hold that part).
+  if [ "$TTY" != /dev/null ] && [ -t 3 ]; then
+    note "(Gita's own output is shown in the terminal only, so it can ask you questions.)"
+    "$gita" "${args[@]}" <"$TTY" >&3 2>&4 || rc=$?
   else
-    warn 'Claude Code is not on PATH yet, so Gita was not connected to it. Run "gita mcp add-to-claude" later.'
+    "$gita" "${args[@]}" <"$TTY" || rc=$?
   fi
+  [ "$rc" = 0 ] || return "$rc"
 
-  # ---- 6. Optional: Figma for frontend work ----
-  local figma=no
+  # ---- 4. Optional: Figma for frontend work ----
   if want_figma; then
     if [ "$os" != macos ]; then
       note "Figma for frontend work is skipped: the Figma desktop app (which the bridge needs) isn't available on Linux."
     else
+      echo >&2
       say "Setting up Figma for frontend work"
       # A subshell, so a "Setup stopped" inside only ends this optional step.
       if (install_figma_bridge); then
-        figma=yes
+        [ "$DRY" = 1 ] || {
+          record "Figma, once: open the Figma desktop app, then Plugins > Development >"
+          record "  Import plugin from manifest... and pick:"
+          record "    $FIGMA_DIR/plugin/manifest.json"
+          record "  Then open the shared Figma file, run \"Figma MCP Bridge\" from"
+          record "  Plugins > Development, and start (or restart) claude."
+        }
       else
         warn "The Figma step didn't finish (see the message above). Everything else is set up."
         warn "Fix that and run the setup again with TB_FIGMA=1."
       fi
     fi
   fi
-
-  # ---- 7. Check ----
-  say "Checking the setup"
-  [ "$DRY" = 1 ] || "$GITA_CLI" doctor || true
-
-  echo
-  say "Done."
-  note "Next:"
-  note "  1. Open a new terminal (so PATH changes apply)."
-  note '  2. Run "claude" and sign in with your company Claude Teams seat.'
-  note '  3. Clone projects with "gita clone <address>", so each uses the right account.'
-  if [ "$figma" = yes ]; then
-    note "  4. Figma, once: open the Figma desktop app, then Plugins > Development >"
-    note "     Import plugin from manifest... and pick:"
-    note "       $FIGMA_DIR/plugin/manifest.json"
-    note '     Then open the shared Figma file, run "Figma MCP Bridge" from'
-    note "     Plugins > Development, and start (or restart) claude."
-  fi
+  return 0
 }
+
+# ---------------------------------------------------------------- output
 
 say()  { printf '\033[36m==> %s\033[0m\n' "$*" >&2; }
 note() { printf '    %s\n' "$*" >&2; }
 warn() { printf '\033[33m    ! %s\033[0m\n' "$*" >&2; }
-fail() { printf '\033[31mSetup stopped: %s\033[0m\n' "$*" >&2; exit 1; }
 has()  { command -v "$1" >/dev/null 2>&1; }
 
-# Runs a command that changes something, or only prints it in a dry run.
-change() {
-  local what=$1; shift
-  if [ "$DRY" = 1 ]; then note "[dry run] would $what"; return 0; fi
-  "$@" <"$TTY" || fail "$what failed."
+# fail "what went wrong" ["what to do" ...]: stops the setup.
+fail() {
+  printf '\033[31mSetup stopped: %s\033[0m\n' "$1" >&2
+  shift
+  local line
+  for line in "$@"; do printf '    %s\n' "$line" >&2; done
+  note "Fix the problem above and run the same command again."
+  exit 1
 }
 
-ask() {  # prompt default preset
-  local answer
-  if [ -n "$3" ]; then printf '%s' "$3"; return; fi
-  if [ -n "$2" ]; then printf '%s [%s]: ' "$1" "$2" >&2; else printf '%s: ' "$1" >&2; fi
-  IFS= read -r answer <"$TTY" || true
-  printf '%s' "${answer:-$2}"
-}
+TB_LOG_FILE=""
+TB_TMP=""
+TB_GITA_RAN=0
+TB_NOTES=()
+record() { TB_NOTES+=("$1"); }   # a line for the script's short summary
 
-ask_email() {  # prompt domain preset
-  local email
-  while :; do
-    email=$(ask "$1" "" "$3" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
-    case "$email" in
-      *@*@*) ;;
-      ?*@"$2") printf '%s' "$email"; return ;;
-    esac
-    [ -z "$3" ] || fail "$email is not an @$2 address."
-    [ "$TTY" != /dev/null ] || fail "No terminal to ask for your @$2 email. Set TB_EMAIL_IO and TB_EMAIL_ONE."
-    warn "Please enter your @$2 address."
-  done
-}
-
-sudo_run() {
-  if [ "$(id -u)" = 0 ]; then "$@"
-  elif [ "$TTY" = /dev/null ]; then sudo -n "$@"   # no terminal to ask for a password
-  else sudo "$@"; fi
-}
-
-install_packages() {
-  if [ "$os" = macos ]; then
-    has git || fail 'Git is missing. Run "xcode-select --install", wait for it to finish, then run this again.'
-    note "Git is installed."
-    if has gh; then
-      note "GitHub CLI is installed."
-    elif has brew; then
-      say "Installing GitHub CLI"
-      change "install GitHub CLI with Homebrew" brew install gh
-    else
-      warn "Homebrew isn't installed, so GitHub CLI was skipped. Get it from https://cli.github.com if you need it."
-    fi
-    return
+on_exit() {
+  local rc=$? n
+  [ -z "$TB_TMP" ] || rm -rf "$TB_TMP"
+  [ "$TB_GITA_RAN" = 0 ] || [ "$rc" = 0 ] || note "Gita stopped with exit code $rc (see above)."
+  if [ ${#TB_NOTES[@]} -gt 0 ]; then
+    say "From the setup script"
+    for n in "${TB_NOTES[@]}"; do note "$n"; done
   fi
+  [ -z "$TB_LOG_FILE" ] || note "Log of this run: $TB_LOG_FILE (send it when asking for help)."
+}
 
-  # Linux. secret-tool: Gita keeps GitHub tokens in the system keyring.
-  local need=() pm="" p
-  has git || need+=(git)
-  has curl || need+=(curl)
-  has secret-tool || need+=(secret-tool)
-  if has apt-get; then pm=apt; elif has dnf; then pm=dnf; elif has pacman; then pm=pacman; fi
-
-  if [ ${#need[@]} -gt 0 ]; then
-    [ -n "$pm" ] || fail "Please install ${need[*]} with your package manager, then run this again."
-    local pkgs=()
-    for p in "${need[@]}"; do pkgs+=("$(pkg_name "$pm" "$p")"); done
-    say "Installing ${pkgs[*]} (may ask for your password)"
-    pkg_install "$pm" "${pkgs[@]}" || fail "Installing ${pkgs[*]} failed."
-  else
-    note "Git, curl and secret-tool are installed."
+# The log holds this run only, readable by you only. No step prints a token.
+# fd 3 and 4 keep the real output, for Gita when it needs the terminal.
+start_log() {
+  exec 3>&1 4>&2
+  TB_LOG_FILE="${TB_LOG:-$HOME/.thoughtbox-setup.log}"
+  rm -f "$TB_LOG_FILE" 2>/dev/null || true
+  if ! ( umask 077 && : >"$TB_LOG_FILE" ) 2>/dev/null; then
+    warn "Couldn't create the log file $TB_LOG_FILE; carrying on without it."
+    TB_LOG_FILE=""; return 0
   fi
-
-  if has gh; then
-    note "GitHub CLI is installed."
-  elif [ -n "$pm" ] && say "Installing GitHub CLI" && pkg_install "$pm" "$(pkg_name "$pm" gh)"; then
-    :
-  else
-    warn "GitHub CLI wasn't installed. Get it from https://cli.github.com if you need it."
-  fi
+  chmod 600 "$TB_LOG_FILE" 2>/dev/null || true
+  exec > >(tee -a "$TB_LOG_FILE") 2>&1
+  note "ThoughtBox dev-setup, $(date '+%Y-%m-%d %H:%M:%S'), $(uname -sm)"
 }
 
-pkg_name() {  # package-manager tool
-  case "$1:$2" in
-    apt:secret-tool) echo libsecret-tools ;;
-    dnf:secret-tool | pacman:secret-tool) echo libsecret ;;
-    pacman:gh) echo github-cli ;;
-    *) echo "$2" ;;
-  esac
-}
-
-pkg_install() {  # package-manager packages...
-  local pm=$1; shift
-  if [ "$DRY" = 1 ]; then note "[dry run] would install $* with $pm"; return 0; fi
-  case $pm in
-    apt) sudo_run apt-get update -qq <"$TTY" && sudo_run apt-get install -y -qq "$@" <"$TTY" ;;
-    dnf) sudo_run dnf install -y "$@" <"$TTY" ;;
-    pacman) sudo_run pacman -S --needed --noconfirm "$@" <"$TTY" ;;
-  esac
-}
-
-# GitHub's release downloads sometimes answer 502/503/504 for a while, so try
-# up to five times, waiting longer each time (10 s up to 40 s), before giving up.
 download() {  # url file
-  local try
-  for try in 1 2 3 4 5; do
-    curl -fsSL --max-time 120 "$1" -o "$2" && return 0
-    [ "$try" = 5 ] && return 1
-    warn "Download failed; trying again in $((try * 10)) seconds."
-    sleep $((try * 10))
-  done
+  # GitHub's release downloads sometimes fail for a moment (a CI run hit
+  # a 504): retry every error, five times, with a longer wait.
+  curl -fsSL --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 600 \
+    --retry 5 --retry-delay 10 --retry-all-errors "$1" -o "$2"
 }
 
 sha256_of() {
   if has sha256sum; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi
 }
 
-install_gita() {
-  local work file url actual
-  work=$(mktemp -d)
-  # shellcheck disable=SC2064
-  trap "rm -rf '$work'" RETURN
-  file="$work/$asset"
+# ---------------------------------------------------------------- Gita
+
+# version_cmp a b: prints newer | older | same (a compared with b). Dotted
+# numbers, compared as numbers; anything after "-" is ignored.
+version_cmp() {
+  local a=${1%%-*} b=${2%%-*} x y
+  while [ -n "$a" ] || [ -n "$b" ]; do
+    x=${a%%.*}; y=${b%%.*}
+    x=${x//[^0-9]/}; y=${y//[^0-9]/}
+    x=$((10#${x:-0})); y=$((10#${y:-0}))
+    if [ "$x" -gt "$y" ]; then echo newer; return; fi
+    if [ "$x" -lt "$y" ]; then echo older; return; fi
+    case $a in *.*) a=${a#*.} ;; *) a="" ;; esac
+    case $b in *.*) b=${b#*.} ;; *) b="" ;; esac
+  done
+  echo same
+}
+
+# Prints missing | ok | older:<version> | newer:<version> | broken:<reason code>.
+gita_state() {
+  [ -e "$GITA_CLI" ] || { echo missing; return; }
+  # The Mac app copies its own command over ~/.gita when it starts, so the
+  # copy inside gita.app has to run too (see fix_macos_cli_signature).
+  if [ "$os" = macos ] && ! { "$cli_dir/bin/gita" --version; } >/dev/null 2>&1; then
+    echo broken:app; return
+  fi
+  local out rc=0
+  # Braces: bash itself prints "Killed: 9" for a killed command otherwise.
+  out=$({ "$GITA_CLI" --version; } 2>/dev/null) || rc=$?
+  if [ "$rc" -ne 0 ]; then echo "broken:$rc"; return; fi
+  case $out in "gita "[0-9]*) ;; *) echo broken:version; return ;; esac
+  out=${out#gita }
+  case $(version_cmp "$out" "$GITA_VERSION") in
+    same) echo ok ;;
+    newer) echo "newer:$out" ;;
+    *) echo "older:$out" ;;
+  esac
+}
+
+broken_reason() {  # reason code
+  case $1 in
+    app) echo "the gita command inside the Gita app doesn't start" ;;
+    version) echo "it doesn't say its version" ;;
+    137) echo "the system stopped it (Killed: 9)" ;;
+    126) echo "it isn't allowed to run" ;;
+    127) echo "a file it needs is missing" ;;
+    *) echo "it exits with code $1" ;;
+  esac
+}
+
+# Gets the Gita release (or the local archive) into $TB_TMP/app and checks it.
+fetch_gita() {
+  local file="$TB_TMP/$asset" url
   if [ -n "${TB_GITA_ARCHIVE:-}" ]; then
     warn "Using the local file $TB_GITA_ARCHIVE (no checksum check)."
-    cp "$TB_GITA_ARCHIVE" "$file"
+    cp "$TB_GITA_ARCHIVE" "$file" || fail "Couldn't read $TB_GITA_ARCHIVE."
   else
-    [ -n "$sha" ] || fail "Gita $GITA_VERSION has no pinned checksum in this script yet. Ask an admin."
+    [ -n "$sha" ] || fail "Gita $GITA_VERSION has no pinned checksum in this script yet." "Ask an admin."
     url="https://github.com/$GITA_REPO/releases/download/v$GITA_VERSION/$asset"
     note "Downloading $url"
-    download "$url" "$file" || fail "Couldn't download Gita."
-    actual=$(sha256_of "$file")
-    [ "$actual" = "$sha" ] ||
-      fail "The Gita download doesn't match its pinned checksum (got $actual). Nothing was installed. Tell an admin."
+    download "$url" "$file" ||
+      fail "Couldn't download Gita." "Check your internet connection and that github.com opens in your browser, then run this again."
+    [ "$(sha256_of "$file")" = "$sha" ] ||
+      fail "The Gita download doesn't match its pinned checksum." "Nothing was installed. Tell an admin."
     note "Checksum OK."
   fi
-
-  mkdir -p "$work/app"
+  mkdir -p "$TB_TMP/app"
   if [ "$os" = macos ]; then
-    ditto -x -k "$file" "$work/app"
-    [ -x "$work/app/gita.app/Contents/Resources/cli/bin/gita" ] || fail "The Gita download has no gita.app."
-    mkdir -p "$(dirname "$app_dir")"
-    rm -rf "$app_dir"
-    mv "$work/app/gita.app" "$app_dir"
-    fix_macos_cli_signature
+    ditto -x -k "$file" "$TB_TMP/app" || fail "Couldn't unpack the Gita download." "Run this again; if it repeats, tell an admin."
+    [ -x "$TB_TMP/app/gita.app/Contents/Resources/cli/bin/gita" ] || fail "The Gita download has no gita.app." "Tell an admin."
+    fix_macos_cli_signature "$TB_TMP/app/gita.app"
   else
-    tar -xzf "$file" -C "$work/app"
-    [ -x "$work/app/cli/bin/gita" ] || fail "The Gita download has no cli/bin/gita."
-    mkdir -p "$(dirname "$app_dir")"
-    rm -rf "$app_dir"
-    mv "$work/app" "$app_dir"
+    tar -xzf "$file" -C "$TB_TMP/app" || fail "Couldn't unpack the Gita download." "Run this again; if it repeats, tell an admin."
+    [ -x "$TB_TMP/app/cli/bin/gita" ] || fail "The Gita download has no cli/bin/gita." "Tell an admin."
+  fi
+}
+
+# Replacing the app while it runs would break it; ask to quit it first.
+wait_for_gita_closed() {
+  has pgrep || return 0
+  pgrep -f "$app_dir/" >/dev/null 2>&1 || return 0
+  [ "$TTY" != /dev/null ] || fail "The Gita app is open." "Quit Gita, then run this again."
+  warn "The Gita app is open. Quit it (Gita menu > Quit), then press Enter."
+  local _
+  IFS= read -r _ <"$TTY" || true
+  if pgrep -f "$app_dir/" >/dev/null 2>&1; then
+    fail "The Gita app is still open." "Quit Gita, then run this again."
+  fi
+}
+
+place_gita() {
+  say "Installing Gita $GITA_VERSION"
+  mkdir -p "$(dirname "$app_dir")"
+  rm -rf "$app_dir"
+  if [ "$os" = macos ]; then
+    mv "$TB_TMP/app/gita.app" "$app_dir"
+  else
+    mv "$TB_TMP/app" "$app_dir"
     mkdir -p "$HOME/.local/share/applications"
     cat >"$HOME/.local/share/applications/gita.desktop" <<EOF
 [Desktop Entry]
@@ -341,20 +328,35 @@ Terminal=false
 Categories=Development;
 EOF
   fi
-
   # Same layout the Gita app keeps: ~/.gita/bin and ~/.gita/lib. Git runs the
   # credential helper from here, so this path must not change.
+  # Delete first, then copy: copying over a signed program on macOS keeps the
+  # old cached signature and the system kills the new one ("Killed: 9").
+  # Only bin and lib are replaced; profiles and settings in ~/.gita stay.
   local d
   for d in bin lib; do
+    rm -rf "${GITA_HOME:?}/$d"
     [ -d "$cli_dir/$d" ] || continue
     mkdir -p "$GITA_HOME/$d"
     cp -R "$cli_dir/$d/." "$GITA_HOME/$d/"
   done
+  [ -f "$GITA_CLI" ] || fail "The Gita download has no command-line program." "Tell an admin."
   chmod +x "$GITA_CLI"
-  local version
-  version=$("$GITA_CLI" --version 2>/dev/null) ||
-    fail "Gita was installed but its gita command won't run on this system. Tell an admin."
-  note "Installed $version."
+}
+
+verify_gita() {
+  local st; st=$(gita_state)
+  case $st in
+    ok) note "Gita $GITA_VERSION is installed and runs." ;;
+    older:* | newer:*)
+      # A local test build may carry another version number.
+      [ -n "${TB_GITA_ARCHIVE:-}" ] ||
+        fail "Gita was installed but reports version ${st#*:} instead of $GITA_VERSION." "Tell an admin."
+      warn "The local file holds Gita ${st#*:}, not $GITA_VERSION." ;;
+    broken:*) fail "Gita was installed but doesn't run: $(broken_reason "${st#broken:}")." \
+      "Run \"$GITA_CLI --version\" to see the error, and send it with the log to an admin." ;;
+    *) fail "Gita was installed but $GITA_CLI is missing." "Tell an admin." ;;
+  esac
 }
 
 # Gita 1.0.2's command is signed with the hardened runtime but without the
@@ -363,11 +365,10 @@ EOF
 # again (ad hoc) with that entitlement. It is fixed inside gita.app, not just
 # in ~/.gita, because the app copies its command to ~/.gita every time it
 # starts. Does nothing once a Gita release ships a command that runs.
-fix_macos_cli_signature() {
-  local exe="$cli_dir/bin/gita" ent f
-  { "$exe" --version; } >/dev/null 2>&1 && return 0   # braces: no "Killed: 9" line
+fix_macos_cli_signature() {  # gita.app folder
+  local app=$1 dir="$1/Contents/Resources/cli" ent="$TB_TMP/cli.entitlements" f
+  { "$dir/bin/gita" --version; } >/dev/null 2>&1 && return 0   # braces: no "Killed: 9" line
   note "Re-signing the gita command so macOS lets it run."
-  ent="$work/cli.entitlements"
   cat >"$ent" <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -378,64 +379,121 @@ fix_macos_cli_signature() {
 </dict>
 </plist>
 EOF
-  find "$cli_dir" -type f \( -perm -u+x -o -name '*.dylib' \) | while IFS= read -r f; do
+  find "$dir" -type f \( -perm -u+x -o -name '*.dylib' \) | while IFS= read -r f; do
     codesign --force --sign - --options runtime --entitlements "$ent" "$f" 2>/dev/null ||
       fail "Couldn't re-sign $f."
   done
   # Re-seal the app, since files inside it changed, keeping its own entitlements.
-  codesign --force --sign - --preserve-metadata=entitlements,flags "$app_dir" 2>/dev/null ||
-    fail "Couldn't re-sign $app_dir."
-  { "$exe" --version; } >/dev/null 2>&1 ||
-    fail "The gita command still won't run on this Mac after re-signing it. Tell an admin."
+  codesign --force --sign - --preserve-metadata=entitlements,flags "$app" 2>/dev/null ||
+    fail "Couldn't re-sign $app."
+  { "$dir/bin/gita" --version; } >/dev/null 2>&1 ||
+    fail "The gita command still won't run on this Mac after re-signing it." "Tell an admin."
 }
 
-add_to_path() {
-  local dir=$1 rc line
+TB_MARK="# Added by ThoughtBox dev-setup"
+
+# rc_tidied line < rc: the rc file without the PATH blocks this script (or an
+# older version of it) wrote, then one block per PATH line at the end:
+# ~/.local/bin (only if an older version added it) and ~/.gita/bin last, so
+# that ~/.gita/bin is the last PATH change and comes first in PATH. A block is
+# the marker line plus the "export PATH=" line for .gita/bin or .local/bin
+# right after it, and the empty line written before it. Other lines stay.
+rc_tidied() {
+  awk -v marker="$TB_MARK" -v gline="$1" '
+    function out(l) { while (blanks > 0) { print ""; blanks-- } print l }
+    function plain(l) {
+      if (l == marker) { held = 1; return }
+      if (l == "") { blanks++; return }
+      out(l)
+    }
+    {
+      if (held) {
+        held = 0
+        if ($0 ~ /^export PATH=/ && $0 ~ /\.(gita|local)\/bin/) {
+          if (blanks > 0) blanks--
+          if ($0 !~ /\.gita\/bin/ && !seen[$0]++) keep[++n] = $0
+          next
+        }
+        out(marker)
+      }
+      plain($0)
+    }
+    END {
+      if (held) out(marker)
+      while (blanks > 0) { print ""; blanks-- }
+      for (i = 1; i <= n; i++) printf "\n%s\n%s\n", marker, keep[i]
+      printf "\n%s\n%s\n", marker, gline
+    }'
+}
+
+# A free "<path>.backup-<date-time>" name; never overwrites an earlier backup.
+backup_name() {
+  local b n=2
+  b="$1.backup-$(date +%Y%m%d-%H%M%S)"
+  while [ -e "$b" ] || [ -L "$b" ]; do b="$1.backup-$(date +%Y%m%d-%H%M%S)-$n"; n=$((n + 1)); done
+  printf '%s' "$b"
+}
+
+# Puts ~/.gita/bin on PATH in ~/.zshrc and ~/.bashrc with exactly one block, at
+# the end. The default shell's file is created if needed; the other is used if
+# present. A changed file is backed up first (owner-only).
+fix_rc_path() {
+  local rc short new="$TB_TMP/rc.new" backup line main_rc="$HOME/.bashrc"
   # shellcheck disable=SC2016
-  line="export PATH=\"${dir/#$HOME/\$HOME}:\$PATH\""
-  # The default shell's file is created if needed; the other is used if present.
-  local main_rc="$HOME/.bashrc"
+  line='export PATH="$HOME/.gita/bin:$PATH"'
   [ "$os" = macos ] && main_rc="$HOME/.zshrc"
   for rc in "$HOME/.zshrc" "$HOME/.bashrc"; do
     [ -f "$rc" ] || [ "$rc" = "$main_rc" ] || continue
-    grep -qF "$line" "$rc" 2>/dev/null && continue
-    if [ "$DRY" = 1 ]; then note "[dry run] would add $dir to PATH in $rc"; continue; fi
-    printf '\n# Added by ThoughtBox dev-setup\n%s\n' "$line" >>"$rc"
+    short="~${rc#"$HOME"}"
+    { [ ! -f "$rc" ] || cat "$rc"; } | rc_tidied "$line" >"$new"
+    [ -f "$rc" ] && cmp -s "$new" "$rc" && continue
+    if [ ! -f "$rc" ]; then
+      if [ "$DRY" = 1 ]; then note "[dry run] would create $short with ~/.gita/bin on PATH"; continue; fi
+      ( umask 077 && cat "$new" >"$rc" ) || { warn "Couldn't create $rc."; continue; }
+      record "Added ~/.gita/bin to PATH in $short (new file)"; continue
+    fi
+    if [ "$DRY" = 1 ]; then
+      note "[dry run] would back up $short and put one ~/.gita/bin PATH line at its end"
+      record "Would tidy PATH lines in $short (dry run)"; continue
+    fi
+    backup=$(backup_name "$rc")
+    if ! ( umask 077 && cp "$rc" "$backup" && chmod 600 "$backup" ); then
+      warn "Couldn't back up $rc, so it was not changed. Add $line at its end yourself."; continue
+    fi
+    cat "$new" >"$rc" || { warn "Couldn't change $rc (backup: $backup)."; continue; }
+    if grep -qxF "$TB_MARK" "$backup"; then
+      record "Tidied PATH lines in $short (backup: $backup)"
+    else
+      record "Added ~/.gita/bin to PATH in $short (backup: $backup)"
+    fi
   done
 }
 
-# Prints one "id<TAB>email<TAB>signedIn" line per Gita profile.
-list_profiles() {
-  [ -x "$GITA_CLI" ] || return 0
-  "$GITA_CLI" profiles --json | awk -F'"' '
-    $2 == "id"       { id = $4 }
-    $2 == "email"    { email = $4 }
-    $2 == "signedIn" { si = ($3 ~ /true/) ? "true" : "false"; print id "\t" email "\t" si }'
+# Another gita earlier on PATH (e.g. Homebrew's) would run instead of Gita's.
+# New terminals put ~/.gita/bin first (see fix_rc_path); this only reports.
+check_other_gita() {
+  local dirs dir mine real p seen=" "
+  mine=$(cd "$GITA_HOME/bin" 2>/dev/null && pwd -P) || mine="$GITA_HOME/bin"
+  IFS=: read -ra dirs <<<"$ORIG_PATH"
+  for dir in "${dirs[@]}"; do
+    p="$dir/gita"
+    { [ -n "$dir" ] && [ -f "$p" ] && [ -x "$p" ]; } || continue
+    real=$(cd "$dir" 2>/dev/null && pwd -P) || continue
+    [ "$real" != "$mine" ] || continue
+    case $seen in *" $real "*) continue ;; esac
+    seen="$seen$real "
+    warn "Another gita is at $p. New terminals use ~/.gita/bin first, so it is now behind Gita's; open a new terminal."
+    case $p in
+      /opt/homebrew/* | /usr/local/* | /home/linuxbrew/*)
+        note 'If it came from Homebrew, you can remove it with "brew uninstall gita".' ;;
+      *) note "You can remove it if you don't need it." ;;
+    esac
+    if [ "$DRY" = 1 ]; then record "Another gita at $p would be behind ~/.gita/bin (dry run)"
+    else record "Another gita at $p is now behind ~/.gita/bin"; fi
+  done
 }
 
-ensure_profile() {  # name email label -> prints id
-  local id out
-  id=$(list_profiles | awk -F'\t' -v e="$2" '$2 == e { print $1; exit }')
-  if [ -n "$id" ]; then note "Profile for $2 already exists."; printf '%s' "$id"; return; fi
-  if [ "$DRY" = 1 ]; then note "[dry run] would add the Gita profile \"$3\" for $2"; printf '<%s>' "$3"; return; fi
-  out=$("$GITA_CLI" profile add --name "$1" --email "$2" --label "$3" --json) ||
-    fail "Couldn't add the Gita profile for $2. $out"
-  note "Added the Gita profile \"$3\" for $2."
-  printf '%s' "$out" | awk -F'"' '$2 == "id" { print $4; exit }'
-}
-
-ensure_signin() {  # id email
-  if [ "${TB_SKIP_SIGNIN:-0}" = 1 ]; then warn "Skipping GitHub sign-in for $2."; return; fi
-  if list_profiles | awk -F'\t' -v i="$1" '$1 == i && $3 == "true" { f = 1 } END { exit !f }'; then
-    note "$2 is already signed in to GitHub."; return
-  fi
-  say "Sign in to GitHub with the account for $2"
-  note "A code is shown below. Enter it on github.com, signed in as the account for this email."
-  note "If the browser is signed in to your other account, sign out there first."
-  change "sign in $2 to GitHub" "$GITA_CLI" sign-in --profile "$1"
-}
-
-# ---- Optional: Figma MCP Bridge (see the README) ----
+# ---------------------------------------------------------------- Figma (optional, see the README)
 
 # TB_FIGMA answers up front; otherwise ask. No terminal to ask in means no.
 want_figma() {
@@ -472,11 +530,14 @@ install_figma_bridge() {
   if [ "$(node_major)" -ge 20 ]; then
     note "Node.js $(node --version) is installed."
   else
-    has brew || fail 'Node.js 20 or later is needed. Install Homebrew (https://brew.sh) or Node.js LTS (https://nodejs.org), then run this again.'
+    has brew || fail 'Node.js 20 or later is needed.' 'Install Homebrew (https://brew.sh) or Node.js LTS (https://nodejs.org), then run this again.'
     say "Installing Node.js"
-    change "install Node.js with Homebrew" brew install node
-    if [ "$DRY" != 1 ] && [ "$(node_major)" -lt 20 ]; then
-      fail 'Node.js 20 or later is needed, but "node --version" still shows an older one (or none). Switch with your version manager, or remove the old Node.js, and run this again.'
+    if [ "$DRY" = 1 ]; then
+      note "[dry run] would install Node.js with Homebrew"
+    else
+      brew install node <"$TTY" || fail "Installing Node.js with Homebrew failed."
+      [ "$(node_major)" -ge 20 ] ||
+        fail 'Node.js 20 or later is needed, but "node --version" still shows an older one (or none).' 'Switch with your version manager, or remove the old Node.js, and run this again.'
     fi
   fi
 
@@ -535,11 +596,10 @@ install_figma_bridge() {
 install_figma_files() {
   local work tgz zip url actual stage
   if pgrep -f "$FIGMA_DIR/server" >/dev/null 2>&1; then
-    fail "The Figma bridge is running. Close Claude Code (and any other AI tool using it), then run this again."
+    fail "The Figma bridge is running." "Close Claude Code (and any other AI tool using it), then run this again."
   fi
-  work=$(mktemp -d) || fail "Couldn't make a temporary folder."
-  # shellcheck disable=SC2064
-  trap "rm -rf '$work'" RETURN
+  work="$TB_TMP/figma"
+  mkdir -p "$work" || fail "Couldn't make a temporary folder."
 
   note "Downloading @gethopp/figma-mcp-bridge@$FIGMA_VERSION from npm"
   (cd "$work" && npm pack "@gethopp/figma-mcp-bridge@$FIGMA_VERSION" --silent >/dev/null </dev/null) ||
@@ -548,7 +608,7 @@ install_figma_files() {
   [ -n "$tgz" ] || fail "npm didn't produce the bridge server package."
   actual=$(sha512_of "$tgz")
   [ "$actual" = "$FIGMA_NPM_SHA512" ] ||
-    fail "The bridge server download doesn't match its pinned checksum. Nothing was installed. Tell an admin."
+    fail "The bridge server download doesn't match its pinned checksum." "Nothing was installed. Tell an admin."
 
   zip="$work/plugin.zip"
   url="https://github.com/gethopp/figma-mcp-bridge/releases/download/v$FIGMA_VERSION/figma-mcp-bridge-v$FIGMA_VERSION.zip"
@@ -556,7 +616,7 @@ install_figma_files() {
   download "$url" "$zip" || fail "Couldn't download the Figma plugin."
   actual=$(sha256_of "$zip")
   [ "$actual" = "$FIGMA_PLUGIN_SHA256" ] ||
-    fail "The Figma plugin download doesn't match its pinned checksum. Nothing was installed. Tell an admin."
+    fail "The Figma plugin download doesn't match its pinned checksum." "Nothing was installed. Tell an admin."
   note "Checksums OK."
 
   # Build the new copy next to the downloads, then swap it in.

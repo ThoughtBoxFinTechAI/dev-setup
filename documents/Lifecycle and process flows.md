@@ -1,0 +1,457 @@
+# dev-setup – Lifecycle and process flows
+
+| | |
+|---|---|
+| Repository | `ThoughtBoxFinTechAI/dev-setup` (public) |
+| Related | `ThoughtBoxFinTechAI/claude-standards` (private), `naseebnaushad/gita` (open source, not affiliated with ThoughtBox) |
+| Written | 2026-11-09 |
+| State described | `main` after hotfix 0.1.1 (PR #6), and `develop` after the move into Gita (PR #5) |
+
+This document explains, with labelled diagrams, **what goes where and when**: how a
+developer machine is set up, where every file lands, how Gita versions are pinned, how
+changes move through branches into `main`, what CI checks, and what we did to get here.
+Every figure has a "Who / What / Where / When" table under it.
+
+Contents:
+1. [The big picture: three repositories](#1-the-big-picture-three-repositories)
+2. [Setting up a developer machine today (hotfix 0.1.1)](#2-setting-up-a-developer-machine-today-hotfix-011)
+3. [Setting up a developer machine with `gita onboard` (PR #5)](#3-setting-up-a-developer-machine-with-gita-onboard-pr-5)
+4. [GitHub sign-in, organization approval and the claude-standards download](#4-github-sign-in-organization-approval-and-the-claude-standards-download)
+5. [Clean-up of old GitHub sign-ins](#5-clean-up-of-old-github-sign-ins)
+6. [What goes where on a developer machine](#6-what-goes-where-on-a-developer-machine)
+7. [Gita version pinning lifecycle](#7-gita-version-pinning-lifecycle)
+8. [Changing the onboarding steps](#8-changing-the-onboarding-steps)
+9. [Branches, pull requests and releases](#9-branches-pull-requests-and-releases)
+10. [CI: what is checked on every pull request](#10-ci-what-is-checked-on-every-pull-request)
+11. [Troubleshooting decision tree](#11-troubleshooting-decision-tree)
+12. [What we did: timeline](#12-what-we-did-timeline)
+13. [Open pull requests and merge order](#13-open-pull-requests-and-merge-order)
+14. [Not done or not verified](#14-not-done-or-not-verified)
+
+---
+
+## 1. The big picture: three repositories
+
+```mermaid
+flowchart LR
+  subgraph GH["GitHub"]
+    DS["dev-setup<br/>(public)<br/>install.sh, install.ps1,<br/>thoughtbox-onboarding.json"]
+    GITA["naseebnaushad/gita<br/>(open source)<br/>releases: zip / tar.gz,<br/>SHA256SUMS"]
+    CS["claude-standards<br/>(private, ThoughtBoxFinTechAI)<br/>rules, plugin, gita/*.json,<br/>setup.sh / setup.ps1"]
+  end
+  DEV["Developer machine"]
+  DEV -->|"1. one-line command downloads<br/>the script from dev-setup main"| DS
+  DS -->|"2. script downloads the pinned<br/>Gita release, checks SHA-256"| GITA
+  DS -->|"3. script downloads the onboarding<br/>file, checks SHA-256 (PR #5)"| DS
+  GITA -->|"4. Gita clones claude-standards<br/>as the @thoughtbox.one account"| CS
+  CS -->|"5. company files + setup script<br/>configure Gita and Claude Code"| DEV
+  BOT["Update pinned Gita<br/>workflow (daily)"] -->|"opens a PR with the new<br/>version + checksums"| DS
+  GITA -.->|"new release"| BOT
+```
+
+*Figure 1 – The three repositories and what flows between them.*
+
+| Who / what | What moves | Where | When |
+|---|---|---|---|
+| Developer | Runs the one-line command | Terminal → `raw.githubusercontent.com/.../dev-setup/main/install.*` | Once per machine; again any time to repair |
+| Setup script | Downloads Gita at the pinned version, checks SHA-256 | GitHub releases of `naseebnaushad/gita` | Every run (skipped when the right Gita is installed) |
+| Setup script (PR #5) | Downloads `thoughtbox-onboarding.json`, checks SHA-256 | `dev-setup/main` | Every run |
+| Gita | Clones claude-standards with the `.one` account | `~/claude-standards` | First run; later runs update it |
+| claude-standards | Company files and setup script | Gita settings, `~/.claude/` | Every run |
+| Update pinned Gita workflow | PR with new version + checksums | `dev-setup` | Daily, when Gita has a newer published release |
+
+---
+
+## 2. Setting up a developer machine today (hotfix 0.1.1)
+
+This is what `main` does after PR #6 (hotfix 0.1.1) is merged. The script does every
+step itself.
+
+```mermaid
+flowchart TD
+  A(["Developer runs the one-line command"]) --> B["Platform check:<br/>Windows 10+, Linux x86_64,<br/>Apple silicon Mac"]
+  B -->|"unsupported"| STOP1["Setup stopped: reason + hint"]
+  B --> C["Prerequisites: git, gh, secret-tool<br/>(winget / Homebrew / apt-dnf-pacman)<br/>missing → install, broken → reinstall"]
+  C --> D["Claude Code: official installer<br/>if missing or broken"]
+  D --> E{"Gita installed<br/>and version 1.0.3?"}
+  E -->|"yes"| G["Keep it"]
+  E -->|"missing / old / broken"| F["Download pinned Gita 1.0.3<br/>(5 tries) → check SHA-256 →<br/>delete then copy ~/.gita/bin, lib<br/>(profiles kept)"]
+  F --> G
+  G --> H["~/.gita/bin on PATH<br/>(Windows: user PATH kept REG_EXPAND_SZ)"]
+  H --> I["Clean-up of old GitHub sign-ins<br/>(Figure 5)"]
+  I --> J["Ask name and both emails,<br/>add or reuse Gita profiles<br/>ThoughtBox (.io), ThoughtBox AI (.one)"]
+  J --> K["Sign in .one (confirm login)"]
+  K --> L["claude-standards: clone / update /<br/>keep / move aside (Figure 4)"]
+  L -->|"download fails"| STOP2["Setup stopped: causes listed,<br/>org approval first"]
+  L --> M["Import gita/thoughtbox.json (.io)<br/>and gita/thoughtbox-ai.json (.one)"]
+  M --> N["Sign in .io (confirm login)"]
+  N --> O["Run claude-standards setup<br/>(no terminal input)"]
+  O --> P["gita mcp add-to-claude"]
+  P --> Q["gita doctor"]
+  Q --> R(["Summary + log<br/>~/.thoughtbox-setup.log"])
+```
+
+*Figure 2 – Setup flow of hotfix 0.1.1 (`install.sh`, `install.ps1` on `main`).*
+
+| Who / what | What | Where | When |
+|---|---|---|---|
+| `install.sh` / `install.ps1` | All steps above | Developer machine | Each run; finished steps are skipped |
+| Log | Everything printed, no tokens | `~/.thoughtbox-setup.log` (owner-only) | Rewritten each run |
+| Exit code | 0 done, 1 a step stopped | Terminal / CI | End of run (no `exit` under `irm \| iex`) |
+
+---
+
+## 3. Setting up a developer machine with `gita onboard` (PR #5)
+
+After PR #5, the script only installs Gita and hands over. Gita does the work from
+`thoughtbox-onboarding.json`. The Figma MCP Bridge (PR #4) stays in this repo as an
+optional step after Gita.
+
+```mermaid
+flowchart TD
+  A(["Developer runs the one-line command"]) --> B["Platform check"]
+  B --> C{"Gita installed?"}
+  C -->|"newer than pinned"| C1["Keep it (never downgrade)"]
+  C -->|"same, runs"| C1
+  C -->|"missing / older / broken"| C2["Download pinned Gita 1.1.0 →<br/>SHA-256 check → install"]
+  C1 --> D
+  C2 --> D["Tidy leftovers: one PATH block in<br/>shell files, ~/.gita/bin first,<br/>warn about other gita, old temp folders"]
+  D --> E["Download thoughtbox-onboarding.json<br/>from dev-setup main → SHA-256 check"]
+  E --> F["gita onboard &lt;file&gt;<br/>--name / --email io= / --email one=<br/>(from TB_* variables)"]
+  subgraph G["Inside Gita (gita onboard)"]
+    G1["Tools: git, gh, Claude Code"] --> G2["Clean-up of old GitHub sign-ins"]
+    G2 --> G3["Old backups (older than 30 days)"]
+    G3 --> G4["Profiles: ThoughtBox, ThoughtBox AI"]
+    G4 --> G5["signIn one"] --> G6["repo: claude-standards"]
+    G6 --> G7["companyFile x2"] --> G8["signIn io"]
+    G8 --> G9["repoScript: setup.sh / setup.ps1"]
+    G9 --> G10["claudeCode"] --> G11["doctor + summary"]
+  end
+  F --> G1
+  G11 --> H{"TB_FIGMA?"}
+  H -->|"yes"| I["Figma MCP Bridge step<br/>(dev-setup, PR #4)"]
+  H -->|"no"| J
+  I --> J(["Script's own list:<br/>PATH tidy-up, other gita, Figma"])
+```
+
+*Figure 3 – Setup flow after PR #5: the script installs Gita; `gita onboard` does the rest.*
+
+| Who / what | What | Where | When |
+|---|---|---|---|
+| Script | Gita install, leftovers, onboarding file, Figma step | `install.sh`, `install.ps1` in this repo | Each run |
+| `thoughtbox-onboarding.json` | ThoughtBox's accounts and steps | This repo, served from `main` | Downloaded each run, checked against `ONBOARDING_SHA256` / `$OnboardingSha256` |
+| `gita onboard` | Tools, clean-up, backups, accounts, repo, company files, setup script, Claude Code, doctor | Gita (generic, open source) | Each run |
+
+---
+
+## 4. GitHub sign-in, organization approval and the claude-standards download
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant D as Developer
+  participant S as Setup (script or gita onboard)
+  participant G as Gita
+  participant B as Browser (github.com)
+  participant O as Org owner
+  participant R as claude-standards repo
+  Note over O: Once per organization, before the rollout
+  O->>B: Approve the Gita OAuth app<br/>Organization settings → Third-party access
+  S->>G: gita sign-in --profile "ThoughtBox AI"
+  G->>B: Opens github.com/login/device, shows a code
+  D->>B: Signs in as the @thoughtbox.one account, enters the code
+  B-->>G: Token (scopes repo, workflow, read:user, user:email, write:public_key, read:org)
+  G->>G: Saves the token in the password store, records the login
+  S->>D: "Signed in as @login. Is that your @thoughtbox.one account?"
+  D-->>S: Yes
+  S->>G: gita clone claude-standards --profile "ThoughtBox AI"
+  G->>R: git clone over HTTPS, Gita's credential helper gives the token
+  alt Org approved the Gita app and the account is a member
+    R-->>G: Repository
+    G-->>S: Cloned to ~/claude-standards
+  else Not approved, wrong account, or not a member
+    R-->>G: Repository not found / 403
+    G-->>S: Fails (Gita says signIn, helper or sshKey)
+    S->>D: Causes: 1 org approval, 2 wrong account, 3 not a member, 4 no connection
+  end
+```
+
+*Figure 4 – Sign-in and the claude-standards download. Without the organization's
+approval of the Gita OAuth app, the token can't see the private repository.*
+
+| Who | What | Where | When |
+|---|---|---|---|
+| Org owner of `ThoughtBoxFinTechAI` and `thoughtboxhub` | Approves the Gita OAuth app | GitHub → Organization settings → Third-party access | Once per organization; before anyone runs the setup |
+| Developer | Signs in as the right account | Browser, device code page | First run, or when asked to sign in again |
+| Gita | Keeps the token per profile | Windows Credential Manager, macOS Keychain, Linux secret-tool | At sign-in |
+| Setup | Clones, updates, keeps or moves aside `~/claude-standards` | Developer machine | Each run |
+
+---
+
+## 5. Clean-up of old GitHub sign-ins
+
+Old saved sign-ins make git use the wrong account even after Gita signs in (this
+broke a developer's setup on Windows).
+
+```mermaid
+flowchart TD
+  A["Find"] --> A1["Saved github.com logins<br/>(Credential Manager, Keychain,<br/>~/.git-credentials) via git credential fill"]
+  A --> A2["git config: url.*.insteadOf for github.com,<br/>sign-in headers, old credential helpers"]
+  A --> A3["GitHub CLI logins (gh auth status)"]
+  A --> A4["Windows: Credential Manager entries<br/>git:https://...github.com (by name),<br/>user-level GH_TOKEN / GITHUB_TOKEN"]
+  A --> A5["Report only: machine-level tokens,<br/>tokens in shell profiles,<br/>Host github.com in SSH settings"]
+  A1 & A2 & A3 & A4 --> B{"Anything found?"}
+  B -->|"no"| Z["nothing to clean"]
+  B -->|"yes"| C["List them (tokens shown as //***@)"]
+  C --> D{"Dry run?"}
+  D -->|"yes"| Z2["dry run: nothing changed"]
+  D -->|"no"| E{"TB_CLEAN=1 / --clean?"}
+  E -->|"yes"| G
+  E -->|"no"| F{"Terminal to ask?"}
+  F -->|"no"| Z3["kept (no terminal to ask)"]
+  F -->|"yes, answered no"| Z4["kept"]
+  F -->|"yes, answered yes"| G["Back up ~/.gitconfig<br/>(.gitconfig.backup-date, owner-only)"]
+  G --> H["Remove each item:<br/>credential reject, config --unset-all,<br/>gh auth logout, cmdkey /delete, reg delete"]
+  H --> I["cleaned (n) or cleaned k of n"]
+```
+
+*Figure 5 – Clean-up of old GitHub sign-ins (script in 0.1.1; `gita onboard` after PR #5).
+Gita's own sign-ins, other sites and SSH keys are never touched.*
+
+| What | Where | When |
+|---|---|---|
+| Backup of `~/.gitconfig` | `~/.gitconfig.backup-YYYYMMDD-HHMMSS` | Before anything is removed |
+| Old backups (can hold removed tokens) | Offered for deletion when older than 30 days, newest kept | Each `gita onboard` run (PR #5) |
+
+---
+
+## 6. What goes where on a developer machine
+
+```mermaid
+flowchart LR
+  subgraph HOME["Home folder (~)"]
+    GITAH["~/.gita/<br/>bin (gita command), lib,<br/>profiles.json, rules.json,<br/>profiles/&lt;id&gt;.gitconfig"]
+    GC["~/.gitconfig<br/>Gita managed block (includeIf)"]
+    CSD["~/claude-standards/<br/>(clone)"]
+    CL["~/.claude/<br/>CLAUDE.md import, settings.json,<br/>plugins"]
+    LOG["~/.thoughtbox-setup.log"]
+    RC["~/.zshrc, ~/.bashrc<br/># Added by ThoughtBox dev-setup"]
+  end
+  subgraph APPS["Applications"]
+    W["Windows: %LOCALAPPDATA%\\Programs\\Gita<br/>+ Start menu shortcut"]
+    M["macOS: ~/Applications/gita.app"]
+    L["Linux: ~/.local/share/gita<br/>+ gita.desktop"]
+  end
+  subgraph SECRETS["Password store"]
+    T["Gita tokens per profile<br/>(Credential Manager / Keychain / secret-tool)"]
+  end
+  SCRIPT["Setup script"] -->|"installs"| APPS
+  SCRIPT -->|"copies cli/bin, cli/lib"| GITAH
+  SCRIPT -->|"PATH line"| RC
+  SCRIPT -->|"writes"| LOG
+  GITA["Gita"] -->|"profiles, rules"| GITAH
+  GITA -->|"managed includeIf block"| GC
+  GITA -->|"sign-in tokens"| T
+  GITA -->|"clone"| CSD
+  CSD -->|"setup.sh / setup.ps1"| CL
+```
+
+*Figure 6 – Where each file lands.*
+
+| Item | Path | Written by | When |
+|---|---|---|---|
+| Gita app | `%LOCALAPPDATA%\Programs\Gita`, `~/Applications/gita.app`, `~/.local/share/gita` | Setup script | Install / update |
+| `gita` command | `~/.gita/bin`, `~/.gita/lib` | Setup script | Install / update (deleted, then copied) |
+| PATH | Shell files (one marked block) / Windows user PATH (REG_EXPAND_SZ) | Setup script | Install; tidied on later runs (PR #5) |
+| Profiles, rules | `~/.gita/*.json`, `~/.gita/profiles/*.gitconfig` | Gita | Profile add, sign-in, company import |
+| Managed git settings | `~/.gitconfig` block "Gita managed rules" | Gita | Rules change |
+| Tokens | Password store, one per profile | Gita | Sign-in |
+| claude-standards | `~/claude-standards` | Gita clone | First run; updated later |
+| Claude Code company setup | `~/.claude/` | claude-standards setup | Each run |
+| Log | `~/.thoughtbox-setup.log` | Setup script | Each run |
+
+---
+
+## 7. Gita version pinning lifecycle
+
+The scripts only install the exact Gita version and checksums written in them.
+
+```mermaid
+flowchart TD
+  A["Gita owner merges changes<br/>into naseebnaushad/gita master"] --> B["Tag vX.Y.Z → release.yml builds<br/>and publishes the release<br/>with SHA256SUMS (from Gita PR #27)"]
+  B --> C["Update pinned Gita workflow<br/>(daily, or by hand)"]
+  C --> D{"Latest published release<br/>newer than the pin?"}
+  D -->|"no"| E["Nothing to do"]
+  D -->|"yes"| F["Download the 3 assets,<br/>check each against SHA256SUMS,<br/>start the Linux build: gita --version"]
+  F -->|"any check fails"| G["Workflow fails, nothing changes"]
+  F --> H["Branch bot/gita-X.Y.Z:<br/>update GITA_VERSION, GITA_SHA256_*<br/>(install.sh) and $GitaVersion, $GitaSha256<br/>(install.ps1)"]
+  H --> I["Open PR into main<br/>+ start the installer tests on it"]
+  I --> J["A person reviews and merges"]
+  J --> K(["Next setup run installs the new Gita"])
+```
+
+*Figure 7 – From a Gita release to every developer machine. The hotfix 0.1.1 pin (1.0.3)
+was checked by hand against GitHub's release digests and the downloads.*
+
+| Who / what | What | Where | When |
+|---|---|---|---|
+| Gita owner | Tags and publishes a release | `naseebnaushad/gita` | When Gita changes |
+| `.github/workflows/gita-bump.yml` + `scripts/gita-bump.sh` | Checks, updates pins, opens PR | This repo, branch `bot/gita-X.Y.Z` | Daily 05:23 UTC, or "Run workflow" |
+| Repository setting | "Allow GitHub Actions to create and approve pull requests" | Settings → Actions → General | Once (needed by the bot) |
+| Reviewer | Merges the bot PR | GitHub | After the installer tests pass |
+
+---
+
+## 8. Changing the onboarding steps
+
+```mermaid
+flowchart LR
+  A["Edit thoughtbox-onboarding.json"] --> B["sha256sum thoughtbox-onboarding.json"]
+  B --> C["Put the new value in<br/>ONBOARDING_SHA256 (install.sh)<br/>and $OnboardingSha256 (install.ps1)"]
+  C --> D["PR → CI lint checks the pin<br/>matches in both scripts"]
+  D --> E["Merge → served from main"]
+  E --> F(["Next setup run uses the new steps"])
+```
+
+*Figure 8 – Changing ThoughtBox's onboarding steps (PR #5). The file format is Gita's,
+documented in Gita's `docs/onboarding.md`; only fixed step types are allowed.*
+
+---
+
+## 9. Branches, pull requests and releases
+
+```mermaid
+gitGraph
+  commit id: "c0aef60 initial setup"
+  commit id: "cedcad2 pin Gita 1.0.2 (#1)"
+  commit id: "bf39d0e macOS fix (#3)"
+  branch develop
+  checkout develop
+  branch feature/figma-bridge
+  commit id: "Figma step (#4)"
+  checkout develop
+  branch feature/gita-onboarding
+  commit id: "move setup into Gita (#5)"
+  checkout main
+  branch hotfix/0.1.1
+  commit id: "safe reinstall (from #2)"
+  commit id: "pin 1.0.3, PATH type, retries"
+  checkout main
+  merge hotfix/0.1.1 id: "PR #6 (person merges)"
+  checkout develop
+  merge feature/gita-onboarding id: "PR #5 incl. #4 (after Gita 1.1.0)"
+  checkout main
+  merge develop id: "release PR develop → main"
+```
+
+*Figure 9 – Branch model as it applies here. Merges are done by a person on GitHub.*
+
+| Branch | Purpose | Merges into | Who merges | When |
+|---|---|---|---|---|
+| `main` | What the one-line command serves | — | — | — |
+| `develop` | Next version | `main` via a release PR | Person, after `/promote release` | When stable |
+| `feature/...`, `fix/...` | Work | `develop` | Person, after review | When green |
+| `hotfix/X.Y.Z` | Urgent fix of `main` | `main`, then the same change into `develop` | Person | As soon as green |
+| `bot/gita-X.Y.Z` | New Gita pin | `main` | Person | After installer tests |
+
+Rules that apply: commits only when the developer asks; no direct pushes to `main` or
+`develop`; Claude never merges a PR; every PR has an explicit base; every branch has a
+change note in `documents/unreleased/<branch>.md`.
+
+---
+
+## 10. CI: what is checked on every pull request
+
+```mermaid
+flowchart LR
+  PR["Pull request / push to main /<br/>Run workflow"] --> L["lint (Ubuntu):<br/>shellcheck install.sh, gita-bump.sh;<br/>onboarding checksum pinned in both scripts;<br/>same Gita version in both"]
+  PR --> U1["unix (Ubuntu):<br/>dry run creates no ~/.gita;<br/>piped install; gita runs;<br/>both profiles; second run skips"]
+  PR --> U2["unix (macOS, Apple silicon):<br/>same + gita.app signature,<br/>app CLI equals ~/.gita CLI"]
+  PR --> MI["macos-intel:<br/>stops with<br/>'only built for Apple silicon'"]
+  PR --> W["windows (PowerShell 7):<br/>install, gita runs"]
+```
+
+*Figure 10 – `.github/workflows/test-install.yml`. Sign-in and claude-standards are skipped
+in CI (they need a person and the private repo).*
+
+---
+
+## 11. Troubleshooting decision tree
+
+```mermaid
+flowchart TD
+  A{"What went wrong?"} -->|"Setup stopped: ..."| B["Read the reason and hint,<br/>fix it, run the same command again"]
+  A -->|"claude-standards couldn't<br/>be downloaded"| C{"Has the org approved<br/>the Gita app?"}
+  C -->|"no / not sure"| C1["Request it: GitHub → Settings →<br/>Applications → Authorized OAuth Apps →<br/>Gita → Request; org owner approves"]
+  C -->|"yes"| D{"Signed in as the<br/>@thoughtbox.one account?"}
+  D -->|"no"| D1["Sign out of github.com in the browser,<br/>gita sign-in --profile 'ThoughtBox AI'"]
+  D -->|"yes"| E["Ask an admin to add the account<br/>to ThoughtBoxFinTechAI"]
+  A -->|"macOS Killed: 9"| F["Run the setup again<br/>(Gita 1.0.3+ is signed correctly)"]
+  A -->|"git or gh still uses<br/>the wrong account"| G["Check report-only items:<br/>GH_TOKEN in shell profile,<br/>Host github.com in SSH settings,<br/>IDE / GitHub Desktop sign-ins;<br/>use gita gh for gh"]
+  A -->|"Anything else"| H["Send ~/.thoughtbox-setup.log"]
+```
+
+*Figure 11 – What to do when something goes wrong.*
+
+---
+
+## 12. What we did: timeline
+
+| Date | Repo | What | State |
+|---|---|---|---|
+| 2026-11-06 | dev-setup | First one-command setup for Windows, macOS, Linux (`c0aef60`) | On `main` |
+| 2026-11-07 | Gita | Releases 1.0.0 – 1.0.2 (MIT licence, installers) | Released |
+| 2026-11-07 | dev-setup | PR #1: pin Gita 1.0.2 | Merged |
+| 2026-11-07 | dev-setup | PR #2: safe reinstall, clean-up of old sign-ins, clear errors; org-approval hint after a developer's clone failed | Closed, replaced by #6 |
+| 2026-11-08 | dev-setup | PR #3: macOS re-sign (`Killed: 9`), Intel stop, installer CI | Merged |
+| 2026-11-08 | dev-setup | PR #4: optional Figma MCP Bridge step | Open into `develop`; carried into #5 |
+| 2026-11-09 | Gita | PRs #21–#25: macOS entitlement, macOS tests, `gita gh`, `gita` on PATH, clone sign-in messages; release 1.0.3 | Merged, released |
+| 2026-11-09 | Gita | PR #27: `gita onboard`, clean-up, old backups, `read:org`, `SHA256SUMS` | Open, CI green |
+| 2026-11-09 | claude-standards | PR #4: guard treats `gita gh` like `gh`; README; CLAUDE.md §9 | Open draft, stacked on #3 |
+| 2026-11-09 | dev-setup | PR #5: move the setup into `gita onboard`; bump bot; CI checks | Open draft into `develop` |
+| 2026-11-09 | dev-setup | PR #6: hotfix 0.1.1 – #2's work + Gita 1.0.3, Windows PATH type kept, 5 download retries | Open into `main`, CI green |
+
+Incidents and fixes recorded in the Change Requests:
+- A Gita test run on Windows was not isolated: it changed a real `~/.gita` and showed a real
+  token. Cleaned up with a backup; the test now refuses to run unless isolated; the token
+  is to be revoked.
+- The old scripts turned the Windows user PATH into REG_SZ with expanded variables. Fixed
+  in 0.1.1 and #5.
+
+---
+
+## 13. Open pull requests and merge order
+
+```mermaid
+flowchart LR
+  P6["dev-setup #6<br/>hotfix 0.1.1 → main<br/>(green)"] --> TEAM(["Team runs the<br/>one-line command"])
+  APPROVE["Org owners approve<br/>the Gita OAuth app"] --> TEAM
+  G27["Gita #27<br/>gita onboard → master<br/>(green)"] --> REL["Tag Gita 1.1.0<br/>(publishes SHA256SUMS)"]
+  REL --> PIN["Pin 1.1.0 in #5<br/>(bot PR or by hand)"]
+  P4["dev-setup #4<br/>Figma (carried into #5)"] --> P5
+  PIN --> P5["dev-setup #5 → develop"]
+  P5 --> RP["Release PR develop → main"]
+  RP --> TEAM2(["Team re-runs: setup<br/>via gita onboard"])
+  C3["claude-standards #3<br/>docs and versioning → main"] --> C4["claude-standards #4<br/>gita gh guard"]
+```
+
+*Figure 12 – What to merge, in which order. Every merge is done by a person.*
+
+| Order | PR | Needs before merging |
+|---|---|---|
+| 1 | dev-setup #6 (hotfix → `main`) | Nothing; CI green |
+| 1 | Org approval of the Gita app | Org owners of `thoughtboxhub` and `ThoughtBoxFinTechAI` |
+| 2 | Gita #27 → `master`, then tag 1.1.0 | Gita owner |
+| 3 | dev-setup #5 → `develop` (includes #4) | Gita 1.1.0 pinned, CI green |
+| 4 | Release PR `develop` → `main` | `/promote release` by the release owner |
+| any | claude-standards #3, then #4 | #3's open Alpha items |
+
+---
+
+## 14. Not done or not verified
+
+- No run on a real Mac by a person (CI's macOS job passes for 0.1.1).
+- Interactive prompts (questions, browser sign-in) are not tested automatically.
+- The bump bot has not run on GitHub yet (needs the repository setting).
+- `SHA256SUMS` is published only from the next Gita release (PR #27).
+- PR #5's install jobs fail until Gita 1.1.0 is pinned (expected).
