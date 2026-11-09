@@ -1,4 +1,4 @@
-# fix/windows-claude-path
+# hotfix/0.2.1
 
 ## What changed and why
 
