@@ -1,4 +1,4 @@
-# fix/setup-reinstall-and-errors
+# hotfix/0.1.1 (was fix/setup-reinstall-and-errors, PR #2)
 
 ## What changed and why
 
@@ -46,6 +46,24 @@ checksum, a failed download, a run killed halfway, and a claude-standards copy t
 moved on from GitHub.
 **Not run:** macOS (CI now runs it on macOS), Windows prompts in a real terminal, a real Git
 Credential Manager, the browser sign-in.
+
+## Hotfix additions (2026-11-09)
+
+Shipped to `main` as a hotfix so the team has a working setup now; the full move into
+Gita (`feature/gita-onboarding`, PR #5) follows when Gita 1.1.0 is released.
+
+- **Gita 1.0.3 pinned** (released 2026-11-09: `gita gh`, the macOS signing fix, `gita` on
+  PATH, clearer clone sign-in errors). Checksums from GitHub's release digests and
+  recomputed from the downloads (both match); the Linux build starts and reports 1.0.3.
+- **Windows user PATH kept as stored:** the script now writes the user PATH through the
+  registry as REG_EXPAND_SZ with `%VARIABLES%` unexpanded. The old code (also on `main`)
+  rewrote it as REG_SZ with the variables expanded.
+- **Downloads retry five times with longer waits:** a CI run of PR #2 failed on a GitHub
+  504 while downloading Gita.
+- **Tests:** `Add-UserPath` 7/7 on a throwaway registry key; Windows dry, real (real
+  1.0.3 download) and re-run; Linux real run, re-run, killed and old Gita; shellcheck and
+  PowerShell parser clean. The developer's real PATH value and type, `~/.gitconfig` and
+  `~/.gita` files were checked unchanged after the runs.
 
 ## Bugs fixed
 

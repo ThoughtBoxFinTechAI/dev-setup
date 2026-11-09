@@ -23,9 +23,9 @@ main() {
 
   # ---- Pinned versions. Update with every Gita release (see README). ----
   local GITA_REPO="naseebnaushad/gita"
-  local GITA_VERSION="1.0.2"
-  local GITA_SHA256_MACOS="49b6a17a0920e66ccadc2a26b7caa241f7ce0ecdf28cd8d9f8f91b077e6b01d7"   # SHA-256 of gita-macos.zip
-  local GITA_SHA256_LINUX="f7736ddc106d0293b1feaeb3494c0ba3645b9ebec5b0ef2cfc1cc0c501122cdc"   # SHA-256 of gita-linux-x64.tar.gz
+  local GITA_VERSION="1.0.3"
+  local GITA_SHA256_MACOS="8613eedd7bddd50058df52d2c1baf7c247e71b52fd80689fcd817f969d7335b9"   # SHA-256 of gita-macos.zip
+  local GITA_SHA256_LINUX="d6ec88152bbe7d6c31c4f62c20bd713f21279d8a3cfb464759fe36405984ec71"   # SHA-256 of gita-linux-x64.tar.gz
 
   local STANDARDS_URL="https://github.com/ThoughtBoxFinTechAI/claude-standards.git"
   local STANDARDS_DIR="$HOME/claude-standards"
@@ -286,8 +286,10 @@ with_timeout() {  # seconds command...: macOS has no timeout(1) unless coreutils
 }
 
 download() {  # url file
+  # GitHub's download servers sometimes answer 5xx for a minute (a CI run hit
+  # a 504): retry every error, five times, with a longer wait.
   curl -fsSL --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 600 \
-    --retry 3 --retry-delay 3 "$1" -o "$2"
+    --retry 5 --retry-delay 10 --retry-all-errors "$1" -o "$2"
 }
 
 # ---------------------------------------------------------------- prerequisites

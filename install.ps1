@@ -23,9 +23,9 @@ function Install-ThoughtBoxDevSetup {
 
   # ---- Pinned versions. Update with every Gita release (see README). ----
   $GitaRepo    = 'naseebnaushad/gita'
-  $GitaVersion = '1.0.2'
+  $GitaVersion = '1.0.3'
   $GitaAsset   = 'gita-windows-x64.zip'
-  $GitaSha256  = 'd73ba7b9a1e34498e32432b6e73eb3d9007bb1cab1b51cc292a351b0d7d4334d'   # SHA-256 of $GitaAsset for $GitaVersion
+  $GitaSha256  = '90830c9c42c81daacd2e580b846da7cba85dba7df97ebcf38d36040429088212'   # SHA-256 of $GitaAsset for $GitaVersion
 
   $StandardsUrl = 'https://github.com/ThoughtBoxFinTechAI/claude-standards.git'
   $StandardsDir = Join-Path $HOME 'claude-standards'
@@ -166,12 +166,24 @@ function Install-ThoughtBoxDevSetup {
     $env:Path = $all -join ';'
   }
 
+  # The user PATH is read and written as stored (REG_EXPAND_SZ, with
+  # %VARIABLES% kept). [Environment]::SetEnvironmentVariable would expand the
+  # variables and change the type to REG_SZ.
   function Add-UserPath([string]$Dir) {
-    $user = [Environment]::GetEnvironmentVariable('Path', 'User')
-    $parts = @($user -split ';' | Where-Object { $_ })
-    if ($parts -contains $Dir) { return }
-    if ($Dry) { Note "[dry run] would add $Dir to your PATH"; return }
-    [Environment]::SetEnvironmentVariable('Path', (($parts + $Dir) -join ';'), 'User')
+    $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
+    try {
+      $raw = [string]$key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+      $parts = @($raw -split ';' | Where-Object { $_ })
+      $want = $Dir.TrimEnd('\')
+      foreach ($p in $parts) {
+        if ([Environment]::ExpandEnvironmentVariables($p).TrimEnd('\') -ieq $want) { return }
+      }
+      if ($Dry) { Note "[dry run] would add $Dir to your PATH"; return }
+      $key.SetValue('Path', (($parts + $Dir) -join ';'), [Microsoft.Win32.RegistryValueKind]::ExpandString)
+    } finally { $key.Close() }
+    # Tell running programs (Explorer) the environment changed.
+    [Environment]::SetEnvironmentVariable('TB_DEV_SETUP_REFRESH', '1', 'User')
+    [Environment]::SetEnvironmentVariable('TB_DEV_SETUP_REFRESH', $null, 'User')
   }
 
   # A free "<path>.backup-<date-time>" name; never overwrites an earlier backup.
@@ -260,13 +272,14 @@ function Install-ThoughtBoxDevSetup {
 
   function Get-WithRetry([string]$Url, [string]$OutFile) {
     $ProgressPreference = 'SilentlyContinue'
-    for ($i = 1; $i -le 3; $i++) {
+    # GitHub's download servers sometimes answer 5xx for a minute: five tries, longer waits.
+    for ($i = 1; $i -le 5; $i++) {
       try { Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing -TimeoutSec 300; return }
       catch {
-        if ($i -eq 3) {
+        if ($i -eq 5) {
           Fail "Couldn't download Gita: $($_.Exception.Message)" @('Check your internet connection and that github.com opens in your browser, then run this again.')
         }
-        Start-Sleep -Seconds 3
+        Start-Sleep -Seconds (5 * $i)
       }
     }
   }

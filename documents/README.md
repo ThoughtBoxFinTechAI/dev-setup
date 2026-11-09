@@ -6,7 +6,7 @@ Index of every document in this folder.
 
 | Branch | Note |
 |---|---|
-| `fix/setup-reinstall-and-errors` | [unreleased/fix-setup-reinstall-and-errors.md](unreleased/fix-setup-reinstall-and-errors.md) |
+| `hotfix/0.1.1` | [unreleased/hotfix-0.1.1.md](unreleased/hotfix-0.1.1.md) |
 
 ## v0.1.0 – Alpha
 
