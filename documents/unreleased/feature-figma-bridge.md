@@ -76,6 +76,13 @@ None (new feature). Two bugs in the new code were found by the tests and fixed b
 commit: an empty process list broke `.Count` under strict mode, and `claude mcp get`'s
 "not found" on stderr stopped the step in Windows PowerShell.
 
+After `feature/gita-onboarding` was merged into this branch, both Windows CI jobs failed:
+when the setup runs in PowerShell 7, Gita starts Claude Code's installer in Windows
+PowerShell 5.1, which inherited PowerShell 7's module path and couldn't find
+`Get-FileHash`. `Invoke-Onboard` now gives Gita the machine module path while it runs
+(PowerShell 7 only) and restores it afterwards. This affects anyone who starts the setup
+from PowerShell 7, not only CI.
+
 ## Notes for users / upgrade steps
 - Frontend developers: run the setup again and answer **yes**, or run it with `TB_FIGMA=1`.
   Then once: Figma desktop app → **Plugins → Development → Import plugin from manifest…**

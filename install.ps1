@@ -377,6 +377,13 @@ function Install-ThoughtBoxDevSetup {
     if ($env:TB_SKIP_STANDARDS -eq '1') { $ga += '--skip-repos' }
     Write-Host ''
     $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    # Under PowerShell 7, PSModulePath lists PowerShell 7's own modules first. Gita runs
+    # Claude Code's installer in Windows PowerShell 5.1, which inherits that path, loads
+    # modules it can't use and then can't find Get-FileHash. Give Gita the machine path.
+    $oldModulePath = $env:PSModulePath
+    if ($PSVersionTable.PSEdition -eq 'Core') {
+      $env:PSModulePath = [Environment]::GetEnvironmentVariable('PSModulePath', 'Machine')
+    }
     try {
       if ($Interactive -and -not [Console]::IsOutputRedirected) {
         Note "(Gita's own output is shown in the console only, so it can ask you questions.)"
@@ -385,7 +392,7 @@ function Install-ThoughtBoxDevSetup {
         & $Gita @ga 2>&1 | ForEach-Object { Write-Host "$_" }
       }
       $S.Code = $LASTEXITCODE
-    } finally { $ErrorActionPreference = $old }
+    } finally { $ErrorActionPreference = $old; $env:PSModulePath = $oldModulePath }
   }
 
 
