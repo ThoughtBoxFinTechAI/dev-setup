@@ -165,6 +165,21 @@ function Install-ThoughtBoxDevSetup {
     Record $what
   }
 
+  # Claude Code's Windows installer puts claude.exe in ~\.local\bin but doesn't add
+  # that folder to PATH, so the setup script Gita runs, and new terminals, can't
+  # find "claude". The folder goes in this session's PATH (Gita and the scripts it
+  # runs inherit it) and, once claude.exe is there, at the end of the user PATH.
+  function Add-ClaudeBinToPath {
+    $dir = Join-Path $HOME '.local\bin'
+    if (-not @($env:Path -split ';' | Where-Object { $_ -and (Test-SameDir $_ $dir) })) { $env:Path = "$env:Path;$dir" }
+    if (-not (Test-Path -LiteralPath (Join-Path $dir 'claude.exe') -PathType Leaf)) { return }
+    $parts = @("$(Get-UserPathRaw)" -split ';' | Where-Object { $_ })
+    if (@($parts | Where-Object { Test-SameDir $_ $dir }).Count -gt 0) { return }
+    if ($Dry) { Record 'Would add ~\.local\bin (Claude Code) to your user PATH (dry run)'; return }
+    Set-UserPathRaw ((@($parts) + $dir) -join ';')
+    Record 'Added ~\.local\bin (Claude Code) to your user PATH'
+  }
+
   # Another gita.exe or gita.cmd on PATH would run instead of Gita's. Windows
   # puts the system PATH before the user PATH, so one there needs an admin.
   function Find-OtherGita {
@@ -568,8 +583,10 @@ function Install-ThoughtBoxDevSetup {
     Set-GitaFirstInUserPath
     Find-OtherGita
     Update-SessionPath
+    Add-ClaudeBinToPath
     $file = Get-OnboardingFile
     Invoke-Onboard $gita $file
+    Add-ClaudeBinToPath
     $code = $S.Code
     if ($code -ne 0) { Note "Gita stopped with exit code $code (see above)." }
 
@@ -622,4 +639,7 @@ $script:TbSetupExit = 0
 Install-ThoughtBoxDevSetup
 # "powershell -File install.ps1" reports only an explicit exit code, so a failed run must
 # exit with it there. Under "irm | iex" there is no script path and no exit (see above).
-if ($script:TbSetupExit -ne 0 -and $MyInvocation.MyCommand.Path) { exit $script:TbSetupExit }
+# Read through PSObject: under "irm | iex" there is no Path property, and a strict mode
+# left on in the terminal (Claude Code's own installer turns it on) makes that an error.
+$tbScript = $MyInvocation.MyCommand.PSObject.Properties['Path']
+if ($script:TbSetupExit -ne 0 -and $tbScript -and $tbScript.Value) { exit $script:TbSetupExit }
