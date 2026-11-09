@@ -56,7 +56,7 @@ function Install-ThoughtBoxDevSetup {
   function Has([string]$Cmd) { [bool](Get-Command $Cmd -ErrorAction SilentlyContinue) }
 
   # GitHub's release downloads sometimes answer 502/503/504 for a while, so try
-  # three times before giving up.
+  # up to five times, waiting longer each time (10 s up to 40 s), before giving up.
   function Get-Download([string]$Url, [string]$OutFile) {
     $ProgressPreference = 'SilentlyContinue'
     for ($try = 1; ; $try++) {
@@ -64,7 +64,7 @@ function Install-ThoughtBoxDevSetup {
         Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing -TimeoutSec 120
         return
       } catch {
-        if ($try -ge 3) { throw }
+        if ($try -ge 5) { throw }
         Warn "Download failed ($($_.Exception.Message)); trying again in $($try * 10) seconds."
         Start-Sleep -Seconds ($try * 10)
       }

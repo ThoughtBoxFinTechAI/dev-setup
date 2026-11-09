@@ -281,12 +281,12 @@ pkg_install() {  # package-manager packages...
 }
 
 # GitHub's release downloads sometimes answer 502/503/504 for a while, so try
-# three times before giving up.
+# up to five times, waiting longer each time (10 s up to 40 s), before giving up.
 download() {  # url file
   local try
-  for try in 1 2 3; do
+  for try in 1 2 3 4 5; do
     curl -fsSL --max-time 120 "$1" -o "$2" && return 0
-    [ "$try" = 3 ] && return 1
+    [ "$try" = 5 ] && return 1
     warn "Download failed; trying again in $((try * 10)) seconds."
     sleep $((try * 10))
   done
