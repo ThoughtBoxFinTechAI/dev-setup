@@ -56,6 +56,16 @@ jobs:
           bash install.sh </dev/null 2>&1 | tee run2.log
           grep -q "Gita .* is installed" run2.log
           grep -q "Profile for ci@thoughtbox.io already exists" run2.log
+      - name: Figma step is skipped without a terminal
+        run: |
+          bash install.sh </dev/null 2>&1 | tee run3.log
+          if grep -q "Setting up Figma" run3.log; then exit 1; fi
+          test ! -e "$HOME/.thoughtbox/figma-mcp-bridge"
+      - name: Figma step on Linux says it isn't available
+        if: runner.os == 'Linux'
+        run: |
+          TB_FIGMA=1 bash install.sh </dev/null 2>&1 | tee run4.log
+          grep -q "isn't available on Linux" run4.log
 
   macos-intel:
     runs-on: macos-15-intel
@@ -67,8 +77,67 @@ jobs:
           cat out.log
           grep -q "only built for Apple silicon" out.log
 
+  figma-macos:
+    runs-on: macos-latest
+    env:
+      TB_FIGMA: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dry run changes nothing
+        run: |
+          TB_DRY_RUN=1 bash install.sh </dev/null
+          test ! -e "$HOME/.thoughtbox/figma-mcp-bridge"
+      - name: Install with the Figma step
+        run: |
+          cat install.sh | bash 2>&1 | tee run1.log
+          grep -q "Import plugin from manifest" run1.log
+      - name: Bridge, plugin and Claude Code entry are in place
+        run: |
+          dir="$HOME/.thoughtbox/figma-mcp-bridge"
+          test "$(cat "$dir/version")" = 0.0.25
+          test -f "$dir/plugin/manifest.json"
+          test -f "$dir/server/node_modules/@gethopp/figma-mcp-bridge/dist/index.js"
+          export PATH="$HOME/.local/bin:$PATH"
+          claude mcp get figma-bridge | tee mcp.log
+          grep -q "FIGMA_BRIDGE_ENABLE_RUN_SCRIPT=1" mcp.log
+      - name: Second run skips finished Figma steps
+        run: |
+          bash install.sh </dev/null 2>&1 | tee run2.log
+          grep -q "Figma MCP Bridge 0.0.25 is installed" run2.log
+          grep -q "figma-bridge is already in Claude Code" run2.log
+
+  figma-windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      TB_FIGMA: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install with the Figma step
+        shell: pwsh
+        run: ./install.ps1
+      - name: Bridge, plugin and Claude Code entry are in place
+        shell: pwsh
+        run: |
+          $dir = Join-Path $HOME '.thoughtbox/figma-mcp-bridge'
+          if ((Get-Content "$dir/version").Trim() -ne '0.0.25') { throw 'wrong version' }
+          if (-not (Test-Path "$dir/plugin/manifest.json")) { throw 'no plugin' }
+          if (-not (Test-Path "$dir/server/node_modules/@gethopp/figma-mcp-bridge/dist/index.js")) { throw 'no server' }
+          $env:Path = "$HOME/.local/bin;$env:Path"
+          $out = claude mcp get figma-bridge | Out-String
+          $out
+          if ($out -notmatch 'FIGMA_BRIDGE_ENABLE_RUN_SCRIPT=1') { throw 'no Claude Code entry' }
+      - name: Second run skips finished Figma steps
+        shell: pwsh
+        run: |
+          $log = ./install.ps1 *>&1 | Out-String
+          $log
+          if ($log -notmatch 'Figma MCP Bridge 0.0.25 is installed') { throw 'reinstalled' }
+          if ($log -notmatch 'figma-bridge is already in Claude Code') { throw 're-added' }
+
   windows:
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Install
