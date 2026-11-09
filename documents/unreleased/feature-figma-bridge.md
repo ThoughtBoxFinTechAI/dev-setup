@@ -89,7 +89,7 @@ commit: an empty process list broke `.Count` under strict mode, and `claude mcp 
 - New variable: `TB_FIGMA` (`1` / `0`).
 - Installed on opt-in only (nothing added to this repo): `@gethopp/figma-mcp-bridge` 0.0.25
   (MIT) and its plugin (MIT), Node.js LTS (MIT), Figma desktop app.
-- Risk: `npm audit` reports high-severity GHSA-mrhx-c7xc-m3w5 in `zod` 3.25.76 (memory
+- Accepted risk (CR D8, accepted by the developer): `npm audit` reports high-severity GHSA-mrhx-c7xc-m3w5 in `zod` 3.25.76 (memory
   use on very large inputs), with no fixed release. Input comes only from the local agent
   and plugin, so the worst case is a local crash. Recorded in the CR and README.
 - Risk: the bridge's sub-dependencies follow its semver ranges; only the package itself is
