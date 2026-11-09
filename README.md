@@ -55,6 +55,12 @@ After it finishes: open a new terminal, run `claude` and sign in with your compa
 For the GitHub CLI use `gita gh <command>` (for example `gita gh pr list`): it runs `gh` as
 the right account for each project.
 
+## How it all fits together
+
+Diagrams of the whole lifecycle (setup flow, what goes where, sign-in and organization
+approval, Gita version pinning, branches and releases, CI, troubleshooting) are in
+[documents/Lifecycle and process flows.md](documents/Lifecycle%20and%20process%20flows.md).
+
 ## Options
 
 Set these environment variables before running:

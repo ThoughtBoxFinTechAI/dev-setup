@@ -185,13 +185,15 @@ function Install-ThoughtBoxDevSetup {
 
   function Get-WithRetry([string]$Url, [string]$OutFile, [string]$What) {
     $ProgressPreference = 'SilentlyContinue'
-    for ($i = 1; $i -le 3; $i++) {
+    # GitHub's release downloads sometimes fail for a moment (a CI run hit
+    # a 504): five tries, waiting longer each time.
+    for ($i = 1; $i -le 5; $i++) {
       try { Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing -TimeoutSec 300; return }
       catch {
-        if ($i -eq 3) {
+        if ($i -eq 5) {
           Fail "Couldn't download ${What}: $($_.Exception.Message)" @('Check your internet connection and that github.com opens in your browser, then run this again.')
         }
-        Start-Sleep -Seconds 3
+        Start-Sleep -Seconds (5 * $i)
       }
     }
   }

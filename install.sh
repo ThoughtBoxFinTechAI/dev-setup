@@ -177,8 +177,10 @@ start_log() {
 }
 
 download() {  # url file
+  # GitHub's release downloads sometimes fail for a moment (a CI run hit
+  # a 504): retry every error, five times, with a longer wait.
   curl -fsSL --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 600 \
-    --retry 3 --retry-delay 3 "$1" -o "$2"
+    --retry 5 --retry-delay 10 --retry-all-errors "$1" -o "$2"
 }
 
 sha256_of() {
