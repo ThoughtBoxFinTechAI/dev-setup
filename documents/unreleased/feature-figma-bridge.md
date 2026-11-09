@@ -47,6 +47,9 @@ no Figma desktop app).
   error under `Stop`, even with `2>$null`; `Invoke-Native`
   ([install.ps1:145](../../install.ps1#L145)) runs `npm`/`claude` with `Continue`. `npm.cmd`
   is used because `npm.ps1` can be blocked by the execution policy.
+- GitHub release downloads (Gita and the plugin) now go through `Get-Download` / `download`,
+  which try three times (10 s, then 20 s apart). The first CI run failed twice on GitHub
+  504s, once for Gita and once for the plugin.
 - CI: new jobs `figma-macos` and `figma-windows`, plus checks in the `unix` job that the
   step is skipped without a terminal and explains itself on Linux.
 
@@ -66,6 +69,7 @@ Details: [Alpha Test Cases](../v0.1.0/alpha/v0.1.0%20-%20Alpha%20Test%20Cases%20
 | FIGMA-009 | Plugin download fails → clear message, nothing installed | ✅ |
 | FIGMA-010 | CI jobs on macOS, Windows, Linux | ⏳ not run yet (runs on the PR) |
 | FIGMA-011 | Manual: import plugin, open shared file, Claude lists it | ⏳ not run |
+| FIGMA-012 | GitHub download fails → retried 3 times (10 s, 20 s), then a clear error (bash and Windows) | ✅ |
 
 ## Bugs fixed
 None (new feature). Two bugs in the new code were found by the tests and fixed before

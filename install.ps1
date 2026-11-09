@@ -55,6 +55,22 @@ function Install-ThoughtBoxDevSetup {
 
   function Has([string]$Cmd) { [bool](Get-Command $Cmd -ErrorAction SilentlyContinue) }
 
+  # GitHub's release downloads sometimes answer 502/503/504 for a while, so try
+  # three times before giving up.
+  function Get-Download([string]$Url, [string]$OutFile) {
+    $ProgressPreference = 'SilentlyContinue'
+    for ($try = 1; ; $try++) {
+      try {
+        Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing -TimeoutSec 120
+        return
+      } catch {
+        if ($try -ge 3) { throw }
+        Warn "Download failed ($($_.Exception.Message)); trying again in $($try * 10) seconds."
+        Start-Sleep -Seconds ($try * 10)
+      }
+    }
+  }
+
   # Picks up PATH changes made by installers, without a new terminal.
   function Update-SessionPath {
     $machine = [Environment]::GetEnvironmentVariable('Path', 'Machine')
@@ -224,7 +240,7 @@ function Install-ThoughtBoxDevSetup {
           $zip = Join-Path $work 'plugin.zip'
           $url = "https://github.com/gethopp/figma-mcp-bridge/releases/download/v$FigmaVersion/figma-mcp-bridge-v$FigmaVersion.zip"
           Note "Downloading $url"
-          Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing -TimeoutSec 120
+          Get-Download $url $zip
           $actual = (Get-FileHash $zip -Algorithm SHA256).Hash
           if ($actual -ne $FigmaPluginSha256.ToUpperInvariant()) {
             Fail "The Figma plugin download doesn't match its pinned checksum. Nothing was installed. Tell an admin."
@@ -325,7 +341,7 @@ function Install-ThoughtBoxDevSetup {
           $url = "https://github.com/$GitaRepo/releases/download/v$GitaVersion/$GitaAsset"
           Note "Downloading $url"
           $ProgressPreference = 'SilentlyContinue'
-          Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
+          Get-Download $url $zip
           $actual = (Get-FileHash $zip -Algorithm SHA256).Hash
           if ($actual -ne $GitaSha256.ToUpperInvariant()) {
             Fail "The Gita download doesn't match its pinned checksum (got $actual). Nothing was installed. Tell an admin."

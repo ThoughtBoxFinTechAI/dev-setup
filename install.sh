@@ -280,6 +280,18 @@ pkg_install() {  # package-manager packages...
   esac
 }
 
+# GitHub's release downloads sometimes answer 502/503/504 for a while, so try
+# three times before giving up.
+download() {  # url file
+  local try
+  for try in 1 2 3; do
+    curl -fsSL --max-time 120 "$1" -o "$2" && return 0
+    [ "$try" = 3 ] && return 1
+    warn "Download failed; trying again in $((try * 10)) seconds."
+    sleep $((try * 10))
+  done
+}
+
 sha256_of() {
   if has sha256sum; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi
 }
@@ -297,7 +309,7 @@ install_gita() {
     [ -n "$sha" ] || fail "Gita $GITA_VERSION has no pinned checksum in this script yet. Ask an admin."
     url="https://github.com/$GITA_REPO/releases/download/v$GITA_VERSION/$asset"
     note "Downloading $url"
-    curl -fsSL "$url" -o "$file" || fail "Couldn't download Gita."
+    download "$url" "$file" || fail "Couldn't download Gita."
     actual=$(sha256_of "$file")
     [ "$actual" = "$sha" ] ||
       fail "The Gita download doesn't match its pinned checksum (got $actual). Nothing was installed. Tell an admin."
@@ -541,7 +553,7 @@ install_figma_files() {
   zip="$work/plugin.zip"
   url="https://github.com/gethopp/figma-mcp-bridge/releases/download/v$FIGMA_VERSION/figma-mcp-bridge-v$FIGMA_VERSION.zip"
   note "Downloading $url"
-  curl -fsSL --max-time 120 "$url" -o "$zip" || fail "Couldn't download the Figma plugin."
+  download "$url" "$zip" || fail "Couldn't download the Figma plugin."
   actual=$(sha256_of "$zip")
   [ "$actual" = "$FIGMA_PLUGIN_SHA256" ] ||
     fail "The Figma plugin download doesn't match its pinned checksum. Nothing was installed. Tell an admin."
