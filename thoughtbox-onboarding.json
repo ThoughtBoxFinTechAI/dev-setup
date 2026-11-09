@@ -1,0 +1,35 @@
+{
+  "format": 1,
+  "name": "ThoughtBox",
+  "tools": { "git": "required", "gh": "optional", "claude": "required" },
+  "cleanup": "ask",
+  "accounts": [
+    {
+      "id": "io",
+      "label": "ThoughtBox",
+      "emailDomain": "thoughtbox.io",
+      "question": "Your @thoughtbox.io email (projects in thoughtboxhub)"
+    },
+    {
+      "id": "one",
+      "label": "ThoughtBox AI",
+      "emailDomain": "thoughtbox.one",
+      "question": "Your @thoughtbox.one email (projects in ThoughtBoxFinTechAI)"
+    }
+  ],
+  "steps": [
+    { "type": "signIn", "account": "one" },
+    {
+      "type": "repo",
+      "account": "one",
+      "url": "https://github.com/ThoughtBoxFinTechAI/claude-standards.git",
+      "dir": "~/claude-standards"
+    },
+    { "type": "companyFile", "account": "io", "repoDir": "~/claude-standards", "path": "gita/thoughtbox.json" },
+    { "type": "companyFile", "account": "one", "repoDir": "~/claude-standards", "path": "gita/thoughtbox-ai.json" },
+    { "type": "signIn", "account": "io" },
+    { "type": "repoScript", "repoDir": "~/claude-standards", "windows": "setup.ps1", "unix": "setup.sh" },
+    { "type": "claudeCode" },
+    { "type": "doctor" }
+  ]
+}
