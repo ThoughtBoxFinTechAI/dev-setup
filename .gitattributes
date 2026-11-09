@@ -1,3 +1,6 @@
 * text=auto
 *.sh text eol=lf
 *.ps1 text eol=crlf
+# Served raw and checked against a SHA-256 pinned in the install scripts, so
+# its bytes must be the same on every checkout.
+thoughtbox-onboarding.json text eol=lf

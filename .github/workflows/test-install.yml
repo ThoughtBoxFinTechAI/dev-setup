@@ -17,13 +17,29 @@ env:
   TB_EMAIL_ONE: ci@thoughtbox.one
   TB_SKIP_SIGNIN: '1'
   TB_SKIP_STANDARDS: '1'
+  # Use this checkout's onboarding file, so a PR tests the file it changes
+  # (the scripts download it from main otherwise). The lint job checks that
+  # its checksum matches the one pinned in both scripts.
+  TB_ONBOARDING_FILE: ${{ github.workspace }}/thoughtbox-onboarding.json
 
 jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: shellcheck install.sh
+      - run: shellcheck install.sh scripts/gita-bump.sh
+      - name: The onboarding file matches the checksum pinned in both scripts
+        run: |
+          sum=$(sha256sum thoughtbox-onboarding.json | cut -d' ' -f1)
+          grep -q "ONBOARDING_SHA256=\"$sum\"" install.sh || { echo "install.sh pins another checksum than $sum"; exit 1; }
+          grep -qi "\$OnboardingSha256 *= *'$sum'" install.ps1 || { echo "install.ps1 pins another checksum than $sum"; exit 1; }
+          python3 -c "import json; json.load(open('thoughtbox-onboarding.json'))"
+      - name: Both scripts pin the same Gita version
+        run: |
+          sh_v=$(sed -n 's/^ *local GITA_VERSION="\([^"]*\)".*/\1/p' install.sh)
+          ps_v=$(sed -n "s/^ *\$GitaVersion *= *'\([^']*\)'.*/\1/p" install.ps1)
+          echo "install.sh $sh_v, install.ps1 $ps_v"
+          [ -n "$sh_v" ] && [ "$sh_v" = "$ps_v" ]
 
   unix:
     strategy:

@@ -13,6 +13,14 @@ we did, with diagrams.
 | Branch | Note |
 |---|---|
 | `hotfix/0.1.1` | [unreleased/hotfix-0.1.1.md](unreleased/hotfix-0.1.1.md) |
+| `feature/gita-onboarding` | [unreleased/feature-gita-onboarding.md](unreleased/feature-gita-onboarding.md) |
+
+## v0.2.0 – Alpha
+
+| Document | File |
+|---|---|
+| Change Request: Move setup into Gita | [v0.2.0/alpha/v0.2.0 - Change Request (Move setup into Gita).md](v0.2.0/alpha/v0.2.0%20-%20Change%20Request%20(Move%20setup%20into%20Gita).md) |
+| Alpha Test Cases: Move setup into Gita | [v0.2.0/alpha/v0.2.0 - Alpha Test Cases (Move setup into Gita).md](v0.2.0/alpha/v0.2.0%20-%20Alpha%20Test%20Cases%20(Move%20setup%20into%20Gita).md) |
 
 ## v0.1.0 – Alpha
 
