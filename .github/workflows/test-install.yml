@@ -177,8 +177,11 @@ jobs:
         shell: powershell
         env:
           TB_ONBOARDING_FILE: missing-onboarding.json
+        # A new powershell -Command, like a terminal: a step runs as a .ps1 file,
+        # where the script's own "exit" applies.
         run: |
-          Set-StrictMode -Version Latest
-          Get-Content ./install.ps1 -Raw | Invoke-Expression
-          if ($LASTEXITCODE -ne 1) { throw "expected exit code 1, got $LASTEXITCODE" }
-          $global:LASTEXITCODE = 0
+          $out = powershell -NoProfile -Command 'Set-StrictMode -Version Latest; Get-Content ./install.ps1 -Raw | Invoke-Expression; if ($LASTEXITCODE -ne 1) { exit 2 }; exit 0' 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          Write-Host $out
+          if ($out -match 'cannot be found on this object') { throw 'strict-mode error at the end of the run' }
+          if ($code -ne 0) { throw "expected the setup to stop with exit code 1 (child exit $code)" }
