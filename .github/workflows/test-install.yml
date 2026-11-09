@@ -17,6 +17,10 @@ env:
   TB_EMAIL_ONE: ci@thoughtbox.one
   TB_SKIP_SIGNIN: '1'
   TB_SKIP_STANDARDS: '1'
+  # Use this checkout's onboarding file, so a PR tests the file it changes
+  # (the scripts download it from main otherwise). The lint job checks that
+  # its checksum matches the one pinned in both scripts.
+  TB_ONBOARDING_FILE: ${{ github.workspace }}/thoughtbox-onboarding.json
 
 jobs:
   lint:

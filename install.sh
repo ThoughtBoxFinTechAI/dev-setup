@@ -28,8 +28,8 @@ main() {
   local GITA_REPO="naseebnaushad/gita"
   local GITA_VERSION="1.1.0"
   # Checksums: filled in by the gita-bump workflow PR.
-  local GITA_SHA256_MACOS=""   # SHA-256 of gita-macos.zip
-  local GITA_SHA256_LINUX=""   # SHA-256 of gita-linux-x64.tar.gz
+  local GITA_SHA256_MACOS="6d8815056bf654da30ef0b202367d705fc8b0d96bf82d22d7dcb435961d1093f"   # SHA-256 of gita-macos.zip
+  local GITA_SHA256_LINUX="51e2142c3069985259d72da31b8dbc91a8a5bc80a9b53689074207ff3d24e616"   # SHA-256 of gita-linux-x64.tar.gz
   local ONBOARDING_URL="https://raw.githubusercontent.com/ThoughtBoxFinTechAI/dev-setup/main/thoughtbox-onboarding.json"
   local ONBOARDING_SHA256="a723840dd6b09911fea6b1afa42cfe641c21deb161d0cb66e3e9e6bf1431a196"
 

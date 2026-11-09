@@ -32,7 +32,7 @@ function Install-ThoughtBoxDevSetup {
   $GitaVersion = '1.1.0'
   $GitaAsset = 'gita-windows-x64.zip'
   # Checksum: filled in by the gita-bump workflow PR.
-  $GitaSha256 = ''   # SHA-256 of $GitaAsset for $GitaVersion
+  $GitaSha256 = '415d4269e3393857fe3ddba611c483e256599a9520dcbb0003de667f811cc9c0'   # SHA-256 of $GitaAsset for $GitaVersion
   $OnboardingUrl = 'https://raw.githubusercontent.com/ThoughtBoxFinTechAI/dev-setup/main/thoughtbox-onboarding.json'
   $OnboardingSha256 = 'a723840dd6b09911fea6b1afa42cfe641c21deb161d0cb66e3e9e6bf1431a196'
 
