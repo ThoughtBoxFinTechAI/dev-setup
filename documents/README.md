@@ -2,6 +2,12 @@
 
 Index of every document in this folder.
 
+## Lifecycle and process flows
+
+[Lifecycle and process flows](Lifecycle%20and%20process%20flows.md): how a machine is set up, what goes
+where and when, Gita version pinning, branches and releases, CI, troubleshooting and what
+we did, with diagrams.
+
 ## Unreleased change notes
 
 | Branch | Note |

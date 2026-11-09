@@ -35,6 +35,12 @@ Linux needs x86_64.
 After it finishes you see a summary of every step. Then open a new terminal, run `claude`
 and sign in with your company seat.
 
+## How it all fits together
+
+Diagrams of the whole lifecycle (setup flow, what goes where, sign-in and organization
+approval, Gita version pinning, branches and releases, CI, troubleshooting) are in
+[documents/Lifecycle and process flows.md](documents/Lifecycle%20and%20process%20flows.md).
+
 ## Options
 
 Set these environment variables before running:
