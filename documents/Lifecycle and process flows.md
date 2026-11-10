@@ -4,8 +4,8 @@
 |---|---|
 | Repository | `ThoughtBoxFinTechAI/dev-setup` (public) |
 | Related | `ThoughtBoxFinTechAI/claude-standards` (private), `naseebnaushad/gita` (open source, not affiliated with ThoughtBox) |
-| Written | 2026-11-09 |
-| State described | `main` after hotfix 0.1.1 (PR #6), and `develop` after the move into Gita (PR #5) |
+| Written | 2026-11-09; updated the same evening for hotfix 0.2.1 |
+| State described | `main` after PRs #6, #5 and #4 were merged (2026-11-09 16:57), with Gita 1.1.1 pinned, plus hotfix 0.2.1 (PR #8, open) |
 
 This document explains, with labelled diagrams, **what goes where and when**: how a
 developer machine is set up, where every file lands, how Gita versions are pinned, how
@@ -14,8 +14,8 @@ Every figure has a "Who / What / Where / When" table under it.
 
 Contents:
 1. [The big picture: three repositories](#1-the-big-picture-three-repositories)
-2. [Setting up a developer machine today (hotfix 0.1.1)](#2-setting-up-a-developer-machine-today-hotfix-011)
-3. [Setting up a developer machine with `gita onboard` (PR #5)](#3-setting-up-a-developer-machine-with-gita-onboard-pr-5)
+2. [Setting up a developer machine before `gita onboard` (hotfix 0.1.1, replaced)](#2-setting-up-a-developer-machine-before-gita-onboard-hotfix-011-replaced)
+3. [Setting up a developer machine with `gita onboard` (on `main`)](#3-setting-up-a-developer-machine-with-gita-onboard-on-main)
 4. [GitHub sign-in, organization approval and the claude-standards download](#4-github-sign-in-organization-approval-and-the-claude-standards-download)
 5. [Clean-up of old GitHub sign-ins](#5-clean-up-of-old-github-sign-ins)
 6. [What goes where on a developer machine](#6-what-goes-where-on-a-developer-machine)
@@ -62,10 +62,11 @@ flowchart LR
 
 ---
 
-## 2. Setting up a developer machine today (hotfix 0.1.1)
+## 2. Setting up a developer machine before `gita onboard` (hotfix 0.1.1, replaced)
 
-This is what `main` does after PR #6 (hotfix 0.1.1) is merged. The script does every
-step itself.
+This is what `main` did after PR #6 (hotfix 0.1.1) was merged, until PR #5 replaced it
+minutes later on 2026-11-09 (Figure 3). The script did every step itself. It is kept
+here because the steps are the same ones Gita now runs.
 
 ```mermaid
 flowchart TD
@@ -101,11 +102,12 @@ flowchart TD
 
 ---
 
-## 3. Setting up a developer machine with `gita onboard` (PR #5)
+## 3. Setting up a developer machine with `gita onboard` (on `main`)
 
-After PR #5, the script only installs Gita and hands over. Gita does the work from
-`thoughtbox-onboarding.json`. The Figma MCP Bridge (PR #4) stays in this repo as an
-optional step after Gita.
+Since PR #5 (merged into `main` on 2026-11-09), the script only installs Gita and hands
+over. Gita does the work from `thoughtbox-onboarding.json`. The Figma MCP Bridge (PR #4)
+stays in this repo as an optional step after Gita. Hotfix 0.2.1 (PR #8) adds the
+Windows step that puts Claude Code's folder on PATH (blue boxes).
 
 ```mermaid
 flowchart TD
@@ -113,10 +115,11 @@ flowchart TD
   B --> C{"Gita installed?"}
   C -->|"newer than pinned"| C1["Keep it (never downgrade)"]
   C -->|"same, runs"| C1
-  C -->|"missing / older / broken"| C2["Download pinned Gita 1.1.0 →<br/>SHA-256 check → install"]
+  C -->|"missing / older / broken"| C2["Download pinned Gita 1.1.1 →<br/>SHA-256 check → install"]
   C1 --> D
   C2 --> D["Tidy leftovers: one PATH block in<br/>shell files, ~/.gita/bin first,<br/>warn about other gita, old temp folders"]
-  D --> E["Download thoughtbox-onboarding.json<br/>from dev-setup main → SHA-256 check"]
+  D --> W1["Windows: ~\.local\bin on this<br/>terminal's PATH (hotfix 0.2.1)"]
+  W1 --> E["Download thoughtbox-onboarding.json<br/>from dev-setup main → SHA-256 check"]
   E --> F["gita onboard &lt;file&gt;<br/>--name / --email io= / --email one=<br/>(from TB_* variables)"]
   subgraph G["Inside Gita (gita onboard)"]
     G1["Tools: git, gh, Claude Code"] --> G2["Clean-up of old GitHub sign-ins"]
@@ -128,7 +131,10 @@ flowchart TD
     G9 --> G10["claudeCode"] --> G11["doctor + summary"]
   end
   F --> G1
-  G11 --> H{"TB_FIGMA?"}
+  G11 --> W2["Windows: ~\.local\bin added to the<br/>user PATH once claude.exe is there<br/>(hotfix 0.2.1)"]
+  W2 --> H{"TB_FIGMA?"}
+  classDef hotfix fill:#dbeafe,stroke:#1d4ed8,color:#1e3a8a
+  class W1,W2 hotfix
   H -->|"yes"| I["Figma MCP Bridge step<br/>(dev-setup, PR #4)"]
   H -->|"no"| J
   I --> J(["Script's own list:<br/>PATH tidy-up, other gita, Figma"])
@@ -141,6 +147,7 @@ flowchart TD
 | Script | Gita install, leftovers, onboarding file, Figma step | `install.sh`, `install.ps1` in this repo | Each run |
 | `thoughtbox-onboarding.json` | ThoughtBox's accounts and steps | This repo, served from `main` | Downloaded each run, checked against `ONBOARDING_SHA256` / `$OnboardingSha256` |
 | `gita onboard` | Tools, clean-up, backups, accounts, repo, company files, setup script, Claude Code, doctor | Gita (generic, open source) | Each run |
+| `Add-ClaudeBinToPath` (Windows only) | Puts `~\.local\bin`, where Claude Code's installer puts `claude.exe`, on this terminal's PATH before Gita runs (so the claude-standards setup finds `claude`), and on the user PATH afterwards | `install.ps1` | Each run; does nothing when already there (hotfix 0.2.1) |
 
 ---
 
@@ -234,6 +241,7 @@ flowchart LR
     GC["~/.gitconfig<br/>Gita managed block (includeIf)"]
     CSD["~/claude-standards/<br/>(clone)"]
     CL["~/.claude/<br/>CLAUDE.md import, settings.json,<br/>plugins"]
+    CB["~/.local/bin/claude<br/>(claude.exe on Windows)"]
     LOG["~/.thoughtbox-setup.log"]
     RC["~/.zshrc, ~/.bashrc<br/># Added by ThoughtBox dev-setup"]
   end
@@ -254,6 +262,8 @@ flowchart LR
   GITA -->|"sign-in tokens"| T
   GITA -->|"clone"| CSD
   CSD -->|"setup.sh / setup.ps1"| CL
+  GITA -->|"Claude Code's installer"| CB
+  SCRIPT -->|"Windows: folder on PATH"| CB
 ```
 
 *Figure 6 – Where each file lands.*
@@ -268,6 +278,7 @@ flowchart LR
 | Tokens | Password store, one per profile | Gita | Sign-in |
 | claude-standards | `~/claude-standards` | Gita clone | First run; updated later |
 | Claude Code company setup | `~/.claude/` | claude-standards setup | Each run |
+| Claude Code program | `~/.local/bin/claude` (`claude.exe` on Windows); on Windows the folder goes on the user PATH | Claude Code's installer, started by Gita; PATH by the setup script | First run; PATH from hotfix 0.2.1 |
 | Log | `~/.thoughtbox-setup.log` | Setup script | Each run |
 
 ---
@@ -388,6 +399,8 @@ flowchart TD
   D -->|"yes"| E["Ask an admin to add the account<br/>to ThoughtBoxFinTechAI"]
   A -->|"macOS Killed: 9"| F["Run the setup again<br/>(Gita 1.0.3+ is signed correctly)"]
   A -->|"git or gh still uses<br/>the wrong account"| G["Check report-only items:<br/>GH_TOKEN in shell profile,<br/>Host github.com in SSH settings,<br/>IDE / GitHub Desktop sign-ins;<br/>use gita gh for gh"]
+  A -->|"Windows: 'claude' not found<br/>from the setup script"| K["Before hotfix 0.2.1: add<br/>%USERPROFILE%\.local\bin to the user PATH,<br/>open a new terminal, run again.<br/>With 0.2.1 the script does this"]
+  A -->|"Windows: The property 'Path'<br/>cannot be found (last line)"| P["Harmless, after a failed run in a terminal<br/>where strict mode was left on. Fix the<br/>error above it; gone with 0.2.1"]
   A -->|"Anything else"| H["Send ~/.thoughtbox-setup.log"]
 ```
 
@@ -404,12 +417,15 @@ flowchart TD
 | 2026-11-07 | dev-setup | PR #1: pin Gita 1.0.2 | Merged |
 | 2026-11-07 | dev-setup | PR #2: safe reinstall, clean-up of old sign-ins, clear errors; org-approval hint after a developer's clone failed | Closed, replaced by #6 |
 | 2026-11-08 | dev-setup | PR #3: macOS re-sign (`Killed: 9`), Intel stop, installer CI | Merged |
-| 2026-11-08 | dev-setup | PR #4: optional Figma MCP Bridge step | Open into `develop`; carried into #5 |
+| 2026-11-08 | dev-setup | PR #4: optional Figma MCP Bridge step | Merged into `main` 2026-11-09 16:57 |
 | 2026-11-09 | Gita | PRs #21–#25: macOS entitlement, macOS tests, `gita gh`, `gita` on PATH, clone sign-in messages; release 1.0.3 | Merged, released |
-| 2026-11-09 | Gita | PR #27: `gita onboard`, clean-up, old backups, `read:org`, `SHA256SUMS` | Open, CI green |
-| 2026-11-09 | claude-standards | PR #4: guard treats `gita gh` like `gh`; README; CLAUDE.md §9 | Open draft, stacked on #3 |
-| 2026-11-09 | dev-setup | PR #5: move the setup into `gita onboard`; bump bot; CI checks | Open draft into `develop` |
-| 2026-11-09 | dev-setup | PR #6: hotfix 0.1.1 – #2's work + Gita 1.0.3, Windows PATH type kept, 5 download retries | Open into `main`, CI green |
+| 2026-11-09 | Gita | PR #27: `gita onboard`, clean-up, old backups, `read:org`, `SHA256SUMS` | Merged; released as 1.1.0, then 1.1.1 |
+| 2026-11-09 | claude-standards | PR #3 (docs and versioning) and the `gita gh` guard (PR #4, merged as PR #6) | Merged into `main` |
+| 2026-11-09 | dev-setup | PR #6: hotfix 0.1.1 – #2's work + Gita 1.0.3, Windows PATH type kept, 5 download retries | Merged into `main` 16:57 |
+| 2026-11-09 | dev-setup | PR #5: move the setup into `gita onboard`; bump bot; CI checks; Gita 1.1.1 pinned | Merged into `main` 16:57 |
+| 2026-11-09 18:32 | dev-setup | A developer's Windows run: Gita 1.1.1, clean-up, both sign-ins and the claude-standards download all worked; the claude-standards setup stopped with `'claude' not found`. A second run, after running Claude Code's installer by hand, also ended with `The property 'Path' cannot be found` | Diagnosed |
+| 2026-11-09 | dev-setup | PR #7 (`fix/windows-claude-path` → `main`): the fix for both | Closed: a `fix/` branch may not go into `main` |
+| 2026-11-09 | dev-setup | PR #8 (`hotfix/0.2.1` → `main`): the same fix; change note renamed `hotfix-0.2.1.md` | Open |
 
 Incidents and fixes recorded in the Change Requests:
 - A Gita test run on Windows was not isolated: it changed a real `~/.gita` and showed a real
@@ -417,34 +433,40 @@ Incidents and fixes recorded in the Change Requests:
   is to be revoked.
 - The old scripts turned the Windows user PATH into REG_SZ with expanded variables. Fixed
   in 0.1.1 and #5.
+- Claude Code's Windows installer leaves `~\.local\bin` off PATH, so the claude-standards
+  setup could not find `claude`. Fixed in hotfix 0.2.1.
+- The script's last line read `$MyInvocation.MyCommand.Path`, which does not exist under
+  `irm | iex`; with strict mode left on in the terminal that is an error. Fixed in 0.2.1.
 
 ---
 
 ## 13. Open pull requests and merge order
 
+State on the evening of 2026-11-09. Green boxes are done; the rest are still to do.
+
 ```mermaid
 flowchart LR
-  P6["dev-setup #6<br/>hotfix 0.1.1 → main<br/>(green)"] --> TEAM(["Team runs the<br/>one-line command"])
+  P6["dev-setup #6<br/>hotfix 0.1.1 → main"]:::done --> P5
+  G27["Gita #27 → master,<br/>tags 1.1.0, 1.1.1"]:::done --> P5["dev-setup #5 + #4 → main<br/>(gita onboard, Figma,<br/>Gita 1.1.1 pinned)"]:::done
+  CS["claude-standards #3, #6<br/>→ main"]:::done
+  P5 --> RUN["Developer's Windows run:<br/>'claude' not found"]:::done
+  RUN --> P7["PR #7 fix/ → main"]:::closed
+  P7 -->|"closed, replaced"| P8["PR #8 hotfix/0.2.1 → main"]
+  P8 --> TEAM(["Team runs the<br/>one-line command"])
   APPROVE["Org owners approve<br/>the Gita OAuth app"] --> TEAM
-  G27["Gita #27<br/>gita onboard → master<br/>(green)"] --> REL["Tag Gita 1.1.0<br/>(publishes SHA256SUMS)"]
-  REL --> PIN["Pin 1.1.0 in #5<br/>(bot PR or by hand)"]
-  P4["dev-setup #4<br/>Figma (carried into #5)"] --> P5
-  PIN --> P5["dev-setup #5 → develop"]
-  P5 --> RP["Release PR develop → main"]
-  RP --> TEAM2(["Team re-runs: setup<br/>via gita onboard"])
-  C3["claude-standards #3<br/>docs and versioning → main"] --> C4["claude-standards #4<br/>gita gh guard"]
+  P8 --> DEV["Bring main into develop<br/>(develop is 22 commits behind)"]
+  classDef done fill:#dcfce7,stroke:#15803d,color:#14532d
+  classDef closed fill:#f3f4f6,stroke:#6b7280,color:#374151,stroke-dasharray:4 3
 ```
 
-*Figure 12 – What to merge, in which order. Every merge is done by a person.*
+*Figure 12 – Pull requests and what is left. Every merge is done by a person.*
 
-| Order | PR | Needs before merging |
+| Order | Item | Needs |
 |---|---|---|
-| 1 | dev-setup #6 (hotfix → `main`) | Nothing; CI green |
+| 1 | dev-setup #8 (hotfix 0.2.1 → `main`) | CI green; a person merges |
 | 1 | Org approval of the Gita app | Org owners of `thoughtboxhub` and `ThoughtBoxFinTechAI` |
-| 2 | Gita #27 → `master`, then tag 1.1.0 | Gita owner |
-| 3 | dev-setup #5 → `develop` (includes #4) | Gita 1.1.0 pinned, CI green |
-| 4 | Release PR `develop` → `main` | `/promote release` by the release owner |
-| any | claude-standards #3, then #4 | #3's open Alpha items |
+| 2 | `main` into `develop` | PR from a branch into `develop` (the hotfix rule; #4, #5 and #6 also went straight into `main`) |
+| later | First `/promote` (adds `VERSION`, tags) | Release owner |
 
 ---
 
@@ -453,5 +475,7 @@ flowchart LR
 - No run on a real Mac by a person (CI's macOS job passes for 0.1.1).
 - Interactive prompts (questions, browser sign-in) are not tested automatically.
 - The bump bot has not run on GitHub yet (needs the repository setting).
-- `SHA256SUMS` is published only from the next Gita release (PR #27).
-- PR #5's install jobs fail until Gita 1.1.0 is pinned (expected).
+- dev-setup has no `VERSION` file and no tags yet; the hotfix numbers 0.1.1 and 0.2.1
+  were chosen by hand until the first `/promote`.
+- Hotfix 0.2.1 was checked by a strict-mode `iex` test and a parse check on Windows
+  PowerShell 5.1, plus its new CI checks; not yet by a full run on a fresh Windows machine.

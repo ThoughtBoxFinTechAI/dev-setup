@@ -15,6 +15,7 @@ we did, with diagrams.
 | `hotfix/0.1.1` | [unreleased/hotfix-0.1.1.md](unreleased/hotfix-0.1.1.md) |
 | `feature/gita-onboarding` | [unreleased/feature-gita-onboarding.md](unreleased/feature-gita-onboarding.md) |
 | `feature/figma-bridge` | [unreleased/feature-figma-bridge.md](unreleased/feature-figma-bridge.md) |
+| `hotfix/0.2.1` | [unreleased/hotfix-0.2.1.md](unreleased/hotfix-0.2.1.md) |
 
 ## v0.2.0 – Alpha
 

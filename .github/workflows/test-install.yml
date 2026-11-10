@@ -166,3 +166,22 @@ jobs:
           if (-not $gita) { $gita = Get-ChildItem "$HOME\.gita\bin\gita.exe" }
           & $gita --version
           if ($LASTEXITCODE -ne 0) { throw "gita doesn't run" }
+      - name: Claude Code's folder is on the user PATH
+        shell: pwsh
+        run: |
+          $dir = Join-Path $HOME '.local\bin'
+          if (-not (Test-Path (Join-Path $dir 'claude.exe'))) { Write-Host "No claude.exe in $dir; nothing to check."; exit 0 }
+          $user = [Environment]::GetEnvironmentVariable('Path', 'User') -split ';' | ForEach-Object { [Environment]::ExpandEnvironmentVariables($_).TrimEnd('\') }
+          if ($user -notcontains $dir) { throw "$dir is not on the user PATH: $($user -join ';')" }
+      - name: A failed run under irm | iex with strict mode on (Windows PowerShell)
+        shell: powershell
+        env:
+          TB_ONBOARDING_FILE: missing-onboarding.json
+        # A new powershell -Command, like a terminal: a step runs as a .ps1 file,
+        # where the script's own "exit" applies.
+        run: |
+          $out = powershell -NoProfile -Command 'Set-StrictMode -Version Latest; Get-Content ./install.ps1 -Raw | Invoke-Expression; if ($LASTEXITCODE -ne 1) { exit 2 }; exit 0' 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          Write-Host $out
+          if ($out -match 'cannot be found on this object') { throw 'strict-mode error at the end of the run' }
+          if ($code -ne 0) { throw "expected the setup to stop with exit code 1 (child exit $code)" }
