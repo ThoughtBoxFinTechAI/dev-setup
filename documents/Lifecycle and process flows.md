@@ -5,7 +5,7 @@
 | Repository | `ThoughtBoxFinTechAI/dev-setup` (public) |
 | Related | `ThoughtBoxFinTechAI/claude-standards` (private), `naseebnaushad/gita` (open source, not affiliated with ThoughtBox) |
 | Written | 2026-11-09; updated the same evening for hotfix 0.2.1, and on 2026-11-11 after it was merged |
-| State described | `main` after PRs #6, #5 and #4 were merged (2026-11-09 16:57), with Gita 1.1.1 pinned, plus hotfix 0.2.1 (PR #8, merged 2026-11-10 11:22); `main` brought into `develop` on 2026-11-11 |
+| State described | `main` after PRs #6, #5 and #4 were merged (2026-11-09 16:57), with Gita 1.1.1 pinned, plus hotfix 0.2.1 (PR #8, merged 2026-11-10 11:22). `develop` was deleted on GitHub on 2026-11-09 and has to be recreated from `main` |
 
 This document explains, with labelled diagrams, **what goes where and when**: how a
 developer machine is set up, where every file lands, how Gita versions are pinned, how
@@ -430,7 +430,7 @@ flowchart TD
 | 2026-11-10 | dev-setup | A second Windows run (new local account): everything set up, including the PATH fix; only the optional Figma step stopped because `winget` is missing on that account | Workaround given; see section 14 |
 | 2026-11-10 | Gita | PR #31: rerunning `gita onboard` repairs an old or incomplete company repository copy | Merged into `master`; not released yet (planned 1.1.2) |
 | 2026-11-11 | Gita | PR #32: notice cancelled GitHub sign-ins (GitHub keeps 10 per account per app) and skip needless sign-ins | Open; planned 1.2.0 |
-| 2026-11-11 | dev-setup | `main` (hotfixes 0.1.1 and 0.2.1, #4, #5) brought into `develop` through `fix/main-into-develop` | Merged into `develop` |
+| 2026-11-09 11:09 UTC | dev-setup | `develop` and the merged feature branches deleted on GitHub | `develop` to be recreated from `main` |
 
 Incidents and fixes recorded in the Change Requests:
 - A Gita test run on Windows was not isolated: it changed a real `~/.gita` and showed a real
@@ -459,7 +459,7 @@ flowchart LR
   P7 -->|"closed, replaced"| P8["PR #8 hotfix/0.2.1 → main"]:::done
   P8 --> TEAM(["Team runs the<br/>one-line command"])
   APPROVE["Org owners approve<br/>the Gita OAuth app"] --> TEAM
-  P8 --> DEV["main into develop<br/>(fix/main-into-develop)"]:::done
+  P8 --> DEV["Recreate develop<br/>from main (deleted 11-09)"]
   G31["Gita #31, #32<br/>→ next Gita release"] --> BUMP["Bump bot PR:<br/>pin the new Gita"]
   classDef done fill:#dcfce7,stroke:#15803d,color:#14532d
   classDef closed fill:#f3f4f6,stroke:#6b7280,color:#374151,stroke-dasharray:4 3
@@ -470,7 +470,7 @@ flowchart LR
 | Order | Item | Needs |
 |---|---|---|
 | done | dev-setup #8 (hotfix 0.2.1 → `main`) | Merged 2026-11-10 11:22 |
-| done | `main` into `develop` | PR from `fix/main-into-develop` (the hotfix rule; #4, #5 and #6 also went straight into `main`) |
+| 1 | Recreate `develop` from `main` | A person (Claude may not push to `develop`); then the next feature branches start from it |
 | 1 | Org approval of the Gita app | Org owners of `thoughtboxhub` and `ThoughtBoxFinTechAI` |
 | 2 | Next Gita release (1.1.2 with #31, or 1.2.0 with #32) | Gita owner tags it; the bump bot then opens the pin PR here |
 | later | First `/promote` (adds `VERSION`, tags) | Release owner |

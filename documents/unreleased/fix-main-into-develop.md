@@ -3,12 +3,12 @@
 ## What changed and why
 
 The company rules say a hotfix goes into `main` and then the same change goes into
-`develop`. Hotfixes 0.1.1 (PR #6) and 0.2.1 (PR #8), and PRs #4 and #5, all went straight
-into `main`, so `develop` was 27 commits behind it. This branch is `main` (at `a214f25`)
-with `develop` merged in (nothing new came from `develop`). Merging it into `develop` makes
-the two the same again, so the next feature starts from what developers actually run.
+`develop`. This branch was made to do that, but `develop` no longer exists on GitHub: it
+was deleted on 2026-11-09 at 11:09 UTC together with the merged feature branches. Claude
+may not push to `develop`, so a person recreates it from `main`; with that, every hotfix is
+in `develop` and nothing needs merging. This branch then carries only the docs update.
 
-It also brings `documents/Lifecycle and process flows.md` up to date after a look at the
+It brings `documents/Lifecycle and process flows.md` up to date after a look at the
 latest claude-standards and Gita changes:
 
 - PR #8 merged on 2026-11-10 11:22; claude-standards PR #7 merged at the same time.
@@ -32,11 +32,11 @@ No code changed. `install.ps1` and `install.sh` are byte for byte the same as on
 | DOCS-001 | Figure 12 renders with mermaid-cli 11.4.2 | Pass |
 | DOCS-002 | The lifecycle document has no control bytes; Windows paths keep their backslash | Pass |
 | SYNC-001 | `git diff origin/main -- install.ps1 install.sh` is empty | Pass |
-| SYNC-002 | CI on the PR into `develop` | See the PR |
+| SYNC-002 | `git ls-remote origin develop` | Empty: `develop` was deleted, see above |
 
 ## Bugs fixed
 
-None in code. The process gap: `develop` is no longer behind `main`.
+None in code. Found: `develop` is missing on GitHub.
 
 ## Notes for users
 
