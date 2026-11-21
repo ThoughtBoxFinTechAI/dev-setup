@@ -26,7 +26,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - run: shellcheck install.sh scripts/gita-bump.sh
       - name: The onboarding file matches the checksum pinned in both scripts
         run: |
@@ -48,7 +48,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Dry run changes nothing
         run: |
           TB_DRY_RUN=1 bash install.sh </dev/null
@@ -86,7 +86,7 @@ jobs:
   macos-intel:
     runs-on: macos-15-intel
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Stops with a clear message
         run: |
           if bash install.sh </dev/null >out.log 2>&1; then cat out.log; exit 1; fi
@@ -98,7 +98,7 @@ jobs:
     env:
       TB_FIGMA: '1'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Dry run changes nothing
         run: |
           TB_DRY_RUN=1 bash install.sh </dev/null
@@ -128,7 +128,7 @@ jobs:
     env:
       TB_FIGMA: '1'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Install with the Figma step
         shell: pwsh
         run: ./install.ps1
@@ -155,7 +155,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Install
         shell: pwsh
         run: ./install.ps1
