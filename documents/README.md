@@ -18,6 +18,7 @@ we did, with diagrams.
 | `hotfix/0.2.1` | [unreleased/hotfix-0.2.1.md](unreleased/hotfix-0.2.1.md) |
 | `chore/bump-gita-1.2.0` | [unreleased/chore-bump-gita-1.2.0.md](unreleased/chore-bump-gita-1.2.0.md) |
 | `fix/main-into-develop` | [unreleased/fix-main-into-develop.md](unreleased/fix-main-into-develop.md) |
+| `fix/checkout-v7` | [unreleased/fix-checkout-v7.md](unreleased/fix-checkout-v7.md) |
 
 ## v0.2.0 – Alpha
 
