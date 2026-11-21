@@ -4,8 +4,8 @@
 |---|---|
 | Repository | `ThoughtBoxFinTechAI/dev-setup` (public) |
 | Related | `ThoughtBoxFinTechAI/claude-standards` (private), `naseebnaushad/gita` (open source, not affiliated with ThoughtBox) |
-| Written | 2026-11-09; updated the same evening for hotfix 0.2.1, and on 2026-11-11 after it was merged |
-| State described | `main` after PRs #6, #5 and #4 were merged (2026-11-09 16:57), with Gita 1.1.1 pinned, plus hotfix 0.2.1 (PR #8, merged 2026-11-10 11:22). `develop` was deleted on GitHub on 2026-11-09 and has to be recreated from `main` |
+| Written | 2026-11-09; updated the same evening for hotfix 0.2.1, on 2026-11-11 after it was merged, and on 2026-11-21 after Gita 1.2.0 was pinned |
+| State described | `main` after PRs #6, #5 and #4 were merged (2026-11-09 16:57), plus hotfix 0.2.1 (PR #8, merged 2026-11-10 11:22) and the Gita 1.2.0 pin (PR #9, merged 2026-11-21 15:15). `develop` was deleted on GitHub on 2026-11-09 and has to be recreated from `main` |
 
 This document explains, with labelled diagrams, **what goes where and when**: how a
 developer machine is set up, where every file lands, how Gita versions are pinned, how
@@ -115,7 +115,7 @@ flowchart TD
   B --> C{"Gita installed?"}
   C -->|"newer than pinned"| C1["Keep it (never downgrade)"]
   C -->|"same, runs"| C1
-  C -->|"missing / older / broken"| C2["Download pinned Gita 1.1.1 →<br/>SHA-256 check → install"]
+  C -->|"missing / older / broken"| C2["Download pinned Gita 1.2.0 →<br/>SHA-256 check → install"]
   C1 --> D
   C2 --> D["Tidy leftovers: one PATH block in<br/>shell files, ~/.gita/bin first,<br/>warn about other gita, old temp folders"]
   D --> W1["Windows: ~\.local\bin on this<br/>terminal's PATH (hotfix 0.2.1)"]
@@ -428,8 +428,11 @@ flowchart TD
 | 2026-11-09 | dev-setup | PR #8 (`hotfix/0.2.1` → `main`): the same fix; change note renamed `hotfix-0.2.1.md` | Merged into `main` 2026-11-10 11:22 |
 | 2026-11-10 | claude-standards | PR #7: its `setup.ps1` also looks in `~\.local\bin` for `claude` | Merged into `main` 11:22 |
 | 2026-11-10 | dev-setup | A second Windows run (new local account): everything set up, including the PATH fix; only the optional Figma step stopped because `winget` is missing on that account | Workaround given; see section 14 |
-| 2026-11-10 | Gita | PR #31: rerunning `gita onboard` repairs an old or incomplete company repository copy | Merged into `master`; not released yet (planned 1.1.2) |
-| 2026-11-11 | Gita | PR #32: notice cancelled GitHub sign-ins (GitHub keeps 10 per account per app) and skip needless sign-ins | Open; planned 1.2.0 |
+| 2026-11-10 | Gita | PR #31: rerunning `gita onboard` repairs an old or incomplete company repository copy | Merged into `master`; released in 1.2.0 |
+| 2026-11-11 | Gita | PR #32: notice cancelled GitHub sign-ins (GitHub keeps 10 per account per app) and skip needless sign-ins | Merged; released in 1.2.0 |
+| 2026-11-19 | Gita | Release 1.2.0 (#31, #32, two accounts in one organization, access tokens in the profile editor) | Released |
+| 2026-11-20 | dev-setup | The bump bot found 1.2.0 and pushed `bot/gita-1.2.0`, but could not open its pull request: "GitHub Actions is not permitted to create or approve pull requests" | Failed run; the setting in section 7 is still off |
+| 2026-11-21 | dev-setup | PR #9 (`chore/bump-gita-1.2.0` → `main`): pin Gita 1.2.0, opened by hand with the same pins as the bot's branch | Merged into `main` 15:15; `bot/gita-1.2.0` deleted |
 | 2026-11-09 11:09 UTC | dev-setup | `develop` and the merged feature branches deleted on GitHub | `develop` to be recreated from `main` |
 
 Incidents and fixes recorded in the Change Requests:
@@ -447,7 +450,7 @@ Incidents and fixes recorded in the Change Requests:
 
 ## 13. Open pull requests and merge order
 
-State on 2026-11-11. Green boxes are done; the rest are still to do.
+State on 2026-11-21. Green boxes are done; the rest are still to do.
 
 ```mermaid
 flowchart LR
@@ -460,7 +463,8 @@ flowchart LR
   P8 --> TEAM(["Team runs the<br/>one-line command"])
   APPROVE["Org owners approve<br/>the Gita OAuth app"] --> TEAM
   P8 --> DEV["Recreate develop<br/>from main (deleted 11-09)"]
-  G31["Gita #31, #32<br/>→ next Gita release"] --> BUMP["Bump bot PR:<br/>pin the new Gita"]
+  G31["Gita #31, #32<br/>→ release 1.2.0"]:::done --> P9["dev-setup #9 → main<br/>(Gita 1.2.0 pinned)"]:::done
+  P9 --> TEAM
   classDef done fill:#dcfce7,stroke:#15803d,color:#14532d
   classDef closed fill:#f3f4f6,stroke:#6b7280,color:#374151,stroke-dasharray:4 3
 ```
@@ -472,7 +476,8 @@ flowchart LR
 | done | dev-setup #8 (hotfix 0.2.1 → `main`) | Merged 2026-11-10 11:22 |
 | 1 | Recreate `develop` from `main` | A person (Claude may not push to `develop`); then the next feature branches start from it |
 | 1 | Org approval of the Gita app | Org owners of `thoughtboxhub` and `ThoughtBoxFinTechAI` |
-| 2 | Next Gita release (1.1.2 with #31, or 1.2.0 with #32) | Gita owner tags it; the bump bot then opens the pin PR here |
+| done | Gita 1.2.0 released and pinned (dev-setup #9) | Merged 2026-11-21 15:15 |
+| 2 | Turn on "Allow GitHub Actions to create and approve pull requests" | A repository admin (Settings → Actions → General), so the bump bot can open the next pin PR itself |
 | later | First `/promote` (adds `VERSION`, tags) | Release owner |
 
 ---
@@ -481,7 +486,8 @@ flowchart LR
 
 - No run on a real Mac by a person (CI's macOS job passes for 0.1.1).
 - Interactive prompts (questions, browser sign-in) are not tested automatically.
-- The bump bot has not run on GitHub yet (needs the repository setting).
+- The bump bot runs daily and found Gita 1.2.0, but cannot open pull requests until the
+  repository setting is on (its 2026-11-20 run failed on that). The 1.2.0 pin was opened by hand (#9).
 - dev-setup has no `VERSION` file and no tags yet; the hotfix numbers 0.1.1 and 0.2.1
   were chosen by hand until the first `/promote`.
 - Hotfix 0.2.1 was checked by a strict-mode `iex` test and a parse check on Windows
