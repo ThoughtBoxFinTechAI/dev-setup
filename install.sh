@@ -28,10 +28,10 @@ main() {
 
   # ---- Pinned versions. The gita-bump workflow updates these lines. ----
   local GITA_REPO="naseebnaushad/gita"
-  local GITA_VERSION="1.1.1"
+  local GITA_VERSION="1.2.0"
   # Checksums: filled in by the gita-bump workflow PR.
-  local GITA_SHA256_MACOS="a1d868de59c244b4bbc94c278569a25b149d0a3c5851443675b03f78f30dff42"   # SHA-256 of gita-macos.zip
-  local GITA_SHA256_LINUX="788f325874c6bb08761e93ae9f72323aa75482b0165c5c2bdbf172a58774e0da"   # SHA-256 of gita-linux-x64.tar.gz
+  local GITA_SHA256_MACOS="fd309d002a4cb8098b025147b148c82a15bf394b459a2ebd10a65ce0b08aa78a"   # SHA-256 of gita-macos.zip
+  local GITA_SHA256_LINUX="efebfac466515a00476117694ed2f9bc6aa0a0d4b5e345ce3315ae29a3ccc46c"   # SHA-256 of gita-linux-x64.tar.gz
   local ONBOARDING_URL="https://raw.githubusercontent.com/ThoughtBoxFinTechAI/dev-setup/main/thoughtbox-onboarding.json"
   local ONBOARDING_SHA256="a723840dd6b09911fea6b1afa42cfe641c21deb161d0cb66e3e9e6bf1431a196"
 
