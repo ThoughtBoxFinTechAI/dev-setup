@@ -10,11 +10,22 @@
 # @thoughtbox.one), claude-standards and its setup, Gita in Claude Code, and a
 # final check with a summary. Safe to run again: finished steps are skipped.
 #
+# Keeping it up to date (all safe to run again):
+#   ... | bash -s -- --update      quiet re-run for scheduled use: no questions, never starts a
+#                                  browser sign-in; updates Gita, claude-standards and its
+#                                  setup, then tells you if a sign-in needs attention
+#   ... | bash -s -- --schedule    run --update every day (launchd on macOS, a systemd user
+#                                  timer or cron on Linux); asked at the end of a normal run
+#   ... | bash -s -- --unschedule  stop the daily update
+#
 # Optional environment variables (set them before running, e.g. TB_DRY_RUN=1 bash):
 #   TB_NAME, TB_EMAIL_IO, TB_EMAIL_ONE  answers to the questions, to skip them
 #   TB_DRY_RUN=1        print what would change, change nothing
 #   TB_CLEAN=1          remove old GitHub sign-ins and settings without asking
 #   TB_LOG=<path>       write the log here instead of ~/.thoughtbox-setup.log
+#   TB_AUTO_UPDATE=1 / TB_AUTO_UPDATE=0  set up the daily update, or not, without being asked
+#                       (default: ask; no terminal = not set up)
+#   TB_UPDATE=1         same as --update
 #   TB_SKIP_SIGNIN=1    don't sign in to GitHub (testing)
 #   TB_TOKEN_SIGNIN=1 / TB_TOKEN_SIGNIN=0  offer to sign in with a classic token (hidden
 #                       prompt) instead of the browser code, or never offer it
@@ -51,18 +62,40 @@ main() {
   local GITA_HOME="$HOME/.gita"
   local GITA_CLI="$GITA_HOME/bin/gita"
   local DRY="${TB_DRY_RUN:-0}"
+  local UPDATE="${TB_UPDATE:-0}" ACTION=install a
+  for a in "$@"; do
+    case $a in
+      --update) UPDATE=1 ;;
+      --schedule) ACTION=schedule ;;
+      --unschedule) ACTION=unschedule ;;
+      -h | --help) sed -n '2,/^$/p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'; return 0 ;;
+      *) fail "Unknown option $a." "Options: --update, --schedule, --unschedule." ;;
+    esac
+  done
+  # An update runs unattended: its own log, never any questions.
+  [ "$UPDATE" != 1 ] || { TB_LOG="${TB_LOG:-$HOME/.thoughtbox-update.log}"; TB_IS_UPDATE=1; }
   local ORIG_PATH="$PATH"
   export PATH="$GITA_HOME/bin:$HOME/.local/bin:$PATH"
 
   # Gita asks its questions on the terminal, not on the piped script.
   local TTY=${TB_TTY:-/dev/tty}   # TB_TTY: a file to read answers from (testing)
   if ! { : <"$TTY"; } 2>/dev/null; then TTY=/dev/null; fi
+  [ "$UPDATE" != 1 ] || TTY=/dev/null
 
   start_log
   trap on_exit EXIT
   # A run that was killed can't clean up; remove what earlier runs left.
   find "${TMPDIR:-/tmp}" -maxdepth 1 -type d -name 'tb-gita.*' -user "$(id -u)" -mmin +60     -exec rm -rf {} + 2>/dev/null || true
   TB_TMP=$(mktemp -d "${TMPDIR:-/tmp}/tb-gita.XXXXXX") || fail "Couldn't create a temporary folder."
+
+  if [ "$ACTION" = schedule ]; then schedule_install; return $?; fi
+  if [ "$ACTION" = unschedule ]; then schedule_remove; return $?; fi
+  if [ "$UPDATE" = 1 ]; then
+    acquire_update_lock || { note "Another update is running; this one stops."; return 0; }
+    [ -f "$GITA_HOME/profiles.json" ] ||
+      { note "This computer isn't set up yet. Run the install command (without --update) first."; return 0; }
+    note "Update run: no questions will be asked."
+  fi
 
   local os asset sha app_dir cli_dir
   case "$(uname -s)" in
@@ -91,6 +124,10 @@ main() {
     older:*) note "Gita ${st#older:} is installed. Updating to $GITA_VERSION." ;;
     broken:*) warn "Gita is installed but doesn't run: $(broken_reason "${st#broken:}"). Reinstalling it." ;;
   esac
+  if [ "$st" != keep ] && [ "$UPDATE" = 1 ] && gita_app_open; then
+    note "The Gita app is open, so Gita stays as it is until the next update."
+    st=keep
+  fi
   if [ "$st" != keep ]; then
     fetch_gita
     if [ "$DRY" = 1 ]; then
@@ -104,8 +141,8 @@ main() {
       verify_gita
     fi
   fi
-  fix_rc_path
-  check_other_gita
+  # Shell startup files are only changed when a person runs the setup.
+  if [ "$UPDATE" != 1 ]; then fix_rc_path; check_other_gita; fi
 
   # ---- 2. The onboarding file ----
   local file="$TB_TMP/thoughtbox-onboarding.json"
@@ -126,7 +163,7 @@ main() {
   [ -z "${TB_EMAIL_ONE:-}" ] || args+=(--email "one=$TB_EMAIL_ONE")
   [ "$DRY" != 1 ] || args+=(--dry-run)
   [ "${TB_CLEAN:-0}" != 1 ] || args+=(--clean)
-  [ "${TB_SKIP_SIGNIN:-0}" != 1 ] || args+=(--skip-sign-in)
+  { [ "${TB_SKIP_SIGNIN:-0}" != 1 ] && [ "$UPDATE" != 1 ]; } || args+=(--skip-sign-in)
   [ "${TB_SKIP_STANDARDS:-0}" != 1 ] || args+=(--skip-repos)
   echo >&2
   local rc=0
@@ -141,6 +178,18 @@ main() {
   fi
   run_gita "$gita" "${args[@]}" || rc=$?
   [ "$rc" = 0 ] || return "$rc"
+
+  if [ "$UPDATE" = 1 ]; then
+    # Onboarding checked the tools and repositories. A cancelled or expired GitHub
+    # sign-in needs a person: say so instead of opening a browser.
+    if ! "$gita" doctor >/dev/null 2>&1; then
+      warn "Gita's check found a problem, most likely a GitHub sign-in that needs renewing."
+      notify_user "ThoughtBox setup" "A GitHub sign-in needs attention. Run the dev-setup command to fix it."
+      record "Gita's check found a problem. Run the dev-setup install command to renew the sign-in."
+    fi
+  else
+    offer_schedule
+  fi
 
   # ---- 4. Optional: Figma for frontend work ----
   if want_figma; then
@@ -186,6 +235,8 @@ fail() {
 
 TB_LOG_FILE=""
 TB_TMP=""
+TB_LOCK=""
+TB_IS_UPDATE=0
 TB_GITA_RAN=0
 TB_NOTES=()
 record() { TB_NOTES+=("$1"); }   # a line for the script's short summary
@@ -193,6 +244,10 @@ record() { TB_NOTES+=("$1"); }   # a line for the script's short summary
 on_exit() {
   local rc=$? n
   [ -z "$TB_TMP" ] || rm -rf "$TB_TMP"
+  [ -z "$TB_LOCK" ] || rmdir "$TB_LOCK" 2>/dev/null || true
+  if [ "$rc" != 0 ] && [ "${TB_IS_UPDATE:-0}" = 1 ]; then
+    notify_user "ThoughtBox setup" "The automatic update failed. See ~/.thoughtbox-update.log"
+  fi
   [ "$TB_GITA_RAN" = 0 ] || [ "$rc" = 0 ] || note "Gita stopped with exit code $rc (see above)."
   if [ ${#TB_NOTES[@]} -gt 0 ]; then
     say "From the setup script"
@@ -501,6 +556,153 @@ check_other_gita() {
   done
 }
 
+# ---------------------------------------------------------------- unattended updates
+
+gita_app_open() { has pgrep && pgrep -f "$app_dir/" >/dev/null 2>&1; }
+
+# One update at a time. A lock older than 3 hours is left over from a run that was killed.
+acquire_update_lock() {
+  local dir="$HOME/.thoughtbox/update.lock"
+  mkdir -p "$HOME/.thoughtbox" || return 1
+  find "$dir" -maxdepth 0 -mmin +180 -exec rmdir {} + 2>/dev/null || true
+  mkdir "$dir" 2>/dev/null || return 1
+  TB_LOCK=$dir
+}
+
+# notify_user <title> <text>: a desktop notification where there is a way to show one.
+notify_user() {
+  case "$(uname -s)" in
+    Darwin) has osascript && osascript -e "display notification \"$2\" with title \"$1\"" >/dev/null 2>&1 || true ;;
+    *) has notify-send && notify-send "$1" "$2" >/dev/null 2>&1 || true ;;
+  esac
+}
+
+TB_UPDATE_URL="https://raw.githubusercontent.com/ThoughtBoxFinTechAI/dev-setup/main/install.sh"
+TB_AGENT_LABEL="one.thoughtbox.dev-setup-update"
+
+# The small script the scheduler runs: it fetches the current install.sh and runs it
+# with --update. A failed download is written to the update log.
+write_update_wrapper() {
+  local w="$HOME/.thoughtbox/auto-update.sh"
+  mkdir -p "$HOME/.thoughtbox" || fail "Couldn't create ~/.thoughtbox."
+  cat >"$w" <<EOF
+#!/usr/bin/env bash
+# Written by ThoughtBox dev-setup. Remove with: install.sh --unschedule
+export PATH="\$HOME/.gita/bin:\$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:\$PATH"
+tmp=\$(mktemp "\${TMPDIR:-/tmp}/tb-update.XXXXXX") || exit 1
+trap 'rm -f "\$tmp"' EXIT
+if curl -fsSL --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 120 --retry 3 "$TB_UPDATE_URL" -o "\$tmp"; then
+  TB_UPDATE=1 bash "\$tmp" --update
+else
+  echo "\$(date '+%Y-%m-%d %H:%M:%S') Couldn't download the update script." >>"\$HOME/.thoughtbox-update.log"
+fi
+EOF
+  chmod 700 "$w"
+  printf '%s' "$w"
+}
+
+schedule_install() {
+  local w minute plist unit_dir
+  minute=$(( $(od -An -N2 -tu2 /dev/urandom | tr -d ' ') % 50 + 5 ))   # spread the load on GitHub
+  if [ "$DRY" = 1 ]; then note "[dry run] would run the update every day at 11:$(printf '%02d' "$minute")"; return 0; fi
+  w=$(write_update_wrapper)
+  case "$(uname -s)" in
+    Darwin)
+      plist="$HOME/Library/LaunchAgents/$TB_AGENT_LABEL.plist"
+      mkdir -p "$HOME/Library/LaunchAgents"
+      cat >"$plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$TB_AGENT_LABEL</string>
+  <key>ProgramArguments</key><array><string>/bin/bash</string><string>$w</string></array>
+  <key>StartCalendarInterval</key><dict><key>Hour</key><integer>11</integer><key>Minute</key><integer>$minute</integer></dict>
+  <key>ProcessType</key><string>Background</string>
+  <key>LowPriorityIO</key><true/>
+</dict>
+</plist>
+EOF
+      launchctl bootout "gui/$(id -u)/$TB_AGENT_LABEL" >/dev/null 2>&1 || true
+      launchctl bootstrap "gui/$(id -u)" "$plist" || fail "Couldn't register the daily update with launchd." "Remove $plist and run this again."
+      note "Daily update set up (launchd, about 11:$(printf '%02d' "$minute"); a missed run happens when the Mac wakes)."
+      ;;
+    *)
+      unit_dir="$HOME/.config/systemd/user"
+      if has systemctl && systemctl --user show-environment >/dev/null 2>&1; then
+        mkdir -p "$unit_dir"
+        cat >"$unit_dir/thoughtbox-update.service" <<EOF
+[Unit]
+Description=ThoughtBox dev-setup update
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash $w
+EOF
+        cat >"$unit_dir/thoughtbox-update.timer" <<EOF
+[Unit]
+Description=Daily ThoughtBox dev-setup update
+
+[Timer]
+OnCalendar=*-*-* 11:$(printf '%02d' "$minute"):00
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target
+EOF
+        systemctl --user daemon-reload && systemctl --user enable --now thoughtbox-update.timer >/dev/null ||
+          fail "Couldn't start the daily update timer."
+        note "Daily update set up (systemd user timer, about 11:$(printf '%02d' "$minute"); a missed run happens at the next start)."
+      elif has crontab; then
+        { crontab -l 2>/dev/null | grep -v 'thoughtbox-auto-update' || true
+          printf '%s 11 * * * /bin/bash %s # thoughtbox-auto-update\n' "$minute" "$w"; } | crontab - ||
+          fail "Couldn't add the daily update to cron."
+        note "Daily update set up (cron, 11:$(printf '%02d' "$minute")). Cron skips a day when the computer is off."
+      else
+        fail "No scheduler found (systemd user timer or cron)." "Run the update yourself with: ... | bash -s -- --update"
+      fi
+      ;;
+  esac
+  record "Daily update is on. Log: ~/.thoughtbox-update.log. Turn it off with --unschedule."
+}
+
+schedule_remove() {
+  if [ "$DRY" = 1 ]; then note "[dry run] would remove the daily update"; return 0; fi
+  case "$(uname -s)" in
+    Darwin)
+      launchctl bootout "gui/$(id -u)/$TB_AGENT_LABEL" >/dev/null 2>&1 || true
+      rm -f "$HOME/Library/LaunchAgents/$TB_AGENT_LABEL.plist" ;;
+    *)
+      if has systemctl; then
+        systemctl --user disable --now thoughtbox-update.timer >/dev/null 2>&1 || true
+        rm -f "$HOME/.config/systemd/user/thoughtbox-update.timer" "$HOME/.config/systemd/user/thoughtbox-update.service"
+        systemctl --user daemon-reload >/dev/null 2>&1 || true
+      fi
+      if has crontab; then
+        { crontab -l 2>/dev/null | grep -v 'thoughtbox-auto-update' || true; } | crontab - 2>/dev/null || true
+      fi ;;
+  esac
+  rm -f "$HOME/.thoughtbox/auto-update.sh"
+  note "The daily update is off."
+}
+
+# TB_AUTO_UPDATE answers up front; otherwise ask once at the end of a normal run.
+offer_schedule() {
+  local answer
+  case "${TB_AUTO_UPDATE:-}" in
+    1) schedule_install; return ;;
+    0) return 0 ;;
+    "") ;;
+    *) warn "TB_AUTO_UPDATE must be 1 or 0 (it is \"$TB_AUTO_UPDATE\"), so the daily update is not changed."; return 0 ;;
+  esac
+  [ "$TTY" != /dev/null ] || return 0
+  printf '\nKeep this computer up to date automatically (a quiet update every day)? [Y/n]: ' >&2
+  IFS= read -r answer <"$TTY" || true
+  answer=$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+  case $answer in n | no) note "Not set up. Turn it on later with: ... | bash -s -- --schedule" ;; *) schedule_install ;; esac
+}
+
 # ---------------------------------------------------------------- classic token sign-in (optional)
 
 # run_gita <gita> <args...>: Gita only asks questions when both its input and
@@ -520,6 +722,7 @@ run_gita() {
 # TB_SKIP_SIGNIN=1 means no.
 want_token_signin() {
   local answer
+  [ "$UPDATE" != 1 ] || return 1
   [ "$DRY" != 1 ] || { [ "${TB_TOKEN_SIGNIN:-}" != 1 ] || note "[dry run] would sign in with classic tokens"; return 1; }
   [ "${TB_SKIP_SIGNIN:-0}" != 1 ] || return 1
   case "${TB_TOKEN_SIGNIN:-}" in
@@ -717,6 +920,8 @@ token_signin() {
 # TB_FIGMA answers up front; otherwise ask. No terminal to ask in means no.
 want_figma() {
   local answer
+  # An update keeps Figma current only for people who already set it up.
+  [ "$UPDATE" != 1 ] || { [ -d "$FIGMA_DIR" ]; return; }
   case "${TB_FIGMA:-}" in
     1) return 0 ;;
     0) return 1 ;;

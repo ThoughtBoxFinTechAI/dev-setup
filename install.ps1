@@ -9,11 +9,21 @@
 # @thoughtbox.one), claude-standards and its setup, Gita in Claude Code, and a
 # final check with a summary. Safe to run again: finished steps are skipped.
 #
+# Keeping it up to date (set the variable, then run the same command; all safe to run again):
+#   $env:TB_UPDATE = '1'       quiet re-run for scheduled use: no questions, never starts a
+#                              browser sign-in; updates Gita, claude-standards and its setup,
+#                              then tells you if a sign-in needs attention
+#   $env:TB_SCHEDULE = '1'     run that update every day (Task Scheduler); asked at the end of
+#                              a normal run
+#   $env:TB_UNSCHEDULE = '1'   stop the daily update
+#
 # Optional environment variables (set them before running, e.g. $env:TB_DRY_RUN = '1'):
 #   TB_NAME, TB_EMAIL_IO, TB_EMAIL_ONE  answers to the questions, to skip them
 #   TB_DRY_RUN=1        print what would change, change nothing
 #   TB_CLEAN=1          remove old GitHub sign-ins and settings without asking
 #   TB_LOG=<path>       write the log here instead of ~\.thoughtbox-setup.log
+#   TB_AUTO_UPDATE=1 / TB_AUTO_UPDATE=0  set up the daily update, or not, without being asked
+#                       (default: ask; no terminal = not set up)
 #   TB_SKIP_SIGNIN=1    don't sign in to GitHub (testing)
 #   TB_TOKEN_SIGNIN=1 / TB_TOKEN_SIGNIN=0  offer to sign in with a classic token (hidden
 #                       prompt) instead of the browser code, or never offer it
@@ -54,13 +64,21 @@ function Install-ThoughtBoxDevSetup {
   $GitaCli    = Join-Path $GitaHome 'bin\gita.exe'
   $GitaAppDir = Join-Path $env:LOCALAPPDATA 'Programs\Gita'
   $Dry        = $env:TB_DRY_RUN -eq '1'
+  $Update     = $env:TB_UPDATE -eq '1'
+  $Action     = if ($env:TB_SCHEDULE -eq '1') { 'schedule' } elseif ($env:TB_UNSCHEDULE -eq '1') { 'unschedule' } else { 'install' }
+  $UpdateUrl  = 'https://raw.githubusercontent.com/ThoughtBoxFinTechAI/dev-setup/main/install.ps1'
+  $TaskName   = 'ThoughtBox dev-setup update'
+  $LockDir    = Join-Path $HOME '.thoughtbox\update.lock'
 
   # Questions need a real console; without one, defaults are used.
   $Interactive = [Environment]::UserInteractive -and -not [Console]::IsInputRedirected -and
     -not ([Environment]::GetCommandLineArgs() | Where-Object { $_ -match '^-noni' })
 
+  # An update runs unattended: no questions.
+  if ($Update) { $Interactive = $false }
+
   # Shared state (an object, so the helper functions below can change it).
-  $S = @{ Log = ''; Tmp = ''; Code = 0; Notes = New-Object System.Collections.ArrayList }
+  $S = @{ Log = ''; Tmp = ''; Lock = ''; Code = 0; Notes = New-Object System.Collections.ArrayList }
 
   function Say([string]$Text) { Write-Host "==> $Text" -ForegroundColor Cyan }
   function Note([string]$Text) { Write-Host "    $Text" }
@@ -74,7 +92,7 @@ function Install-ThoughtBoxDevSetup {
 
   # The log holds this run only and is readable by you only. No step prints a token.
   function Start-Log {
-    $path = if ($env:TB_LOG) { $env:TB_LOG } else { Join-Path $HOME '.thoughtbox-setup.log' }
+    $path = if ($env:TB_LOG) { $env:TB_LOG } elseif ($Update) { Join-Path $HOME '.thoughtbox-update.log' } else { Join-Path $HOME '.thoughtbox-setup.log' }
     try {
       if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
       New-Item -ItemType File -Path $path -Force | Out-Null
@@ -360,6 +378,10 @@ function Install-ThoughtBoxDevSetup {
     }
     if ($st -like 'older:*') { Note "Gita $($st.Substring(6)) is installed. Updating to $GitaVersion." }
     if ($st -like 'broken:*') { Warn "Gita is installed but doesn't run: $(Broken-Reason $st.Substring(7)). Reinstalling it." }
+    if ($Update -and (Test-GitaRunning)) {
+      Note 'Gita is running, so it stays as it is until the next update.'
+      return $GitaCli
+    }
     $app = Get-Gita
     if ($Dry) {
       Note "[dry run] would install Gita $GitaVersion into $GitaAppDir and $GitaHome"
@@ -394,7 +416,7 @@ function Install-ThoughtBoxDevSetup {
     if ($env:TB_EMAIL_ONE) { $ga += @('--email', "one=$env:TB_EMAIL_ONE") }
     if ($Dry) { $ga += '--dry-run' }
     if ($env:TB_CLEAN -eq '1') { $ga += '--clean' }
-    if ($env:TB_SKIP_SIGNIN -eq '1') { $ga += '--skip-sign-in' }
+    if ($env:TB_SKIP_SIGNIN -eq '1' -or $Update) { $ga += '--skip-sign-in' }
     if ($env:TB_SKIP_STANDARDS -eq '1') { $ga += '--skip-repos' }
     foreach ($e in $Extra) { if ($ga -notcontains $e) { $ga += $e } }
     Write-Host ''
@@ -423,6 +445,104 @@ function Install-ThoughtBoxDevSetup {
   function Has([string]$Cmd) { [bool](Get-Command $Cmd -ErrorAction SilentlyContinue) }
 
   # TB_FIGMA answers up front; otherwise ask. No console to ask in means no.
+  # ---------------------------------------------------------- unattended updates
+
+  function Test-GitaRunning {
+    $procs = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+        $p = $null; try { $p = $_.Path } catch { }
+        $p -and ($p -like "$GitaAppDir\*" -or $p -like "$GitaHome\bin\*")
+      })
+    return ($procs.Count -gt 0)
+  }
+
+  # A balloon notification, where Windows can show one. Best effort.
+  function Send-Notice([string]$Title, [string]$Text) {
+    try {
+      Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+      $n = New-Object System.Windows.Forms.NotifyIcon
+      $n.Icon = [System.Drawing.SystemIcons]::Information
+      $n.Visible = $true
+      $n.ShowBalloonTip(10000, $Title, $Text, [System.Windows.Forms.ToolTipIcon]::Info)
+      Start-Sleep -Seconds 8
+      $n.Dispose()
+    } catch { }
+  }
+
+  # One update at a time. A lock older than 3 hours is left over from a run that was killed.
+  # Returns $false when this update should stop quietly (nothing is wrong).
+  function Enter-UpdateRun {
+    if (-not (Test-Path -LiteralPath (Join-Path $GitaHome 'profiles.json'))) {
+      Note "This computer isn't set up yet. Run the install command (without TB_UPDATE) first."
+      return $false
+    }
+    New-Item -ItemType Directory -Force -Path (Split-Path $LockDir) | Out-Null
+    if ((Test-Path -LiteralPath $LockDir) -and (Get-Item -LiteralPath $LockDir).LastWriteTime -lt (Get-Date).AddHours(-3)) {
+      Remove-Item -LiteralPath $LockDir -Force -Recurse -ErrorAction SilentlyContinue
+    }
+    try { New-Item -ItemType Directory -Path $LockDir -ErrorAction Stop | Out-Null }
+    catch { Note 'Another update is running; this one stops.'; return $false }
+    $S.Lock = $LockDir
+    Note 'Update run: no questions will be asked.'
+    return $true
+  }
+
+  # The small script the scheduled task runs: it fetches the current install.ps1 and runs it
+  # with TB_UPDATE=1. A failed download or run is written to the update log.
+  function Write-UpdateWrapper {
+    $dir = Join-Path $HOME '.thoughtbox'
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    $w = Join-Path $dir 'auto-update.ps1'
+    $body = @"
+# Written by ThoughtBox dev-setup. Remove with: `$env:TB_UNSCHEDULE = '1' and the install command.
+`$ErrorActionPreference = 'Stop'
+try {
+  [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+  `$env:TB_UPDATE = '1'
+  `$script = Invoke-RestMethod -Uri '$UpdateUrl' -UseBasicParsing -TimeoutSec 120
+  Invoke-Expression `$script
+} catch {
+  Add-Content -LiteralPath (Join-Path `$HOME '.thoughtbox-update.log') -Value "`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') The update failed: `$(`$_.Exception.Message)"
+}
+"@
+    [IO.File]::WriteAllText($w, $body)
+    return $w
+  }
+
+  function Install-UpdateTask {
+    $minute = Get-Random -Minimum 5 -Maximum 55   # spread the load on GitHub
+    if ($Dry) { Note ('[dry run] would run the update every day at 11:{0:00}' -f $minute); return }
+    $w = Write-UpdateWrapper
+    $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
+      -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$w`""
+    $trigger = New-ScheduledTaskTrigger -Daily -At ('11:{0:00}' -f $minute)
+    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+      -ExecutionTimeLimit (New-TimeSpan -Hours 1) -MultipleInstances IgnoreNew
+    try {
+      Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings `
+        -Description 'Keeps Gita and claude-standards up to date (ThoughtBox dev-setup).' -Force | Out-Null
+    } catch { Fail "Couldn't register the daily update in Task Scheduler: $($_.Exception.Message)" }
+    Note ('Daily update set up (Task Scheduler, about 11:{0:00}; a missed run happens when the PC is next on).' -f $minute)
+    Record 'Daily update is on. Log: ~\.thoughtbox-update.log. Turn it off with $env:TB_UNSCHEDULE = ''1''.'
+  }
+
+  function Remove-UpdateTask {
+    if ($Dry) { Note '[dry run] would remove the daily update'; return }
+    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Join-Path $HOME '.thoughtbox\auto-update.ps1') -Force -ErrorAction SilentlyContinue
+    Note 'The daily update is off.'
+  }
+
+  # TB_AUTO_UPDATE answers up front; otherwise ask once at the end of a normal run.
+  function Offer-UpdateTask {
+    if ($env:TB_AUTO_UPDATE -eq '1') { Install-UpdateTask; return }
+    if ($env:TB_AUTO_UPDATE -eq '0') { return }
+    if ($env:TB_AUTO_UPDATE) { Warn "TB_AUTO_UPDATE must be 1 or 0 (it is `"$env:TB_AUTO_UPDATE`"), so the daily update is not changed."; return }
+    if (-not $Interactive) { return }
+    Write-Host ''
+    if (Ask-YN 'Keep this computer up to date automatically (a quiet update every day)?' $true) { Install-UpdateTask }
+    else { Note 'Not set up. Turn it on later with $env:TB_SCHEDULE = ''1'' and the install command.' }
+  }
+
   # ---------------------------------------------------- classic token sign-in (optional)
 
   # The scopes Gita needs, as GitHub's "new classic token" page takes them.
@@ -431,6 +551,7 @@ function Install-ThoughtBoxDevSetup {
   # TB_TOKEN_SIGNIN answers up front; otherwise ask. No console, a dry run or
   # TB_SKIP_SIGNIN=1 means no.
   function Want-TokenSignIn {
+    if ($Update) { return $false }
     if ($Dry) { if ($env:TB_TOKEN_SIGNIN -eq '1') { Note '[dry run] would sign in with classic tokens' }; return $false }
     if ($env:TB_SKIP_SIGNIN -eq '1') { return $false }
     if ($env:TB_TOKEN_SIGNIN -eq '1') { return $Interactive }
@@ -556,6 +677,8 @@ function Install-ThoughtBoxDevSetup {
   }
 
   function Want-Figma {
+    # An update keeps Figma current only for people who already set it up.
+    if ($Update) { return (Test-Path -LiteralPath $FigmaDir) }
     if ($env:TB_FIGMA -eq '1') { return $true }
     if ($env:TB_FIGMA -eq '0') { return $false }
     if ($env:TB_FIGMA) { Warn "TB_FIGMA must be 1 or 0 (it is `"$env:TB_FIGMA`"), so the Figma step is skipped."; return $false }
@@ -718,9 +841,13 @@ function Install-ThoughtBoxDevSetup {
     $S.Tmp = Join-Path ([IO.Path]::GetTempPath()) ('tb-gita-' + [guid]::NewGuid())
     New-Item -ItemType Directory -Path $S.Tmp | Out-Null
 
+    if ($Action -eq 'schedule') { Install-UpdateTask }
+    elseif ($Action -eq 'unschedule') { Remove-UpdateTask }
+    elseif ($Update -and -not (Enter-UpdateRun)) { }
+    else {
     $gita = Use-Gita
-    Set-GitaFirstInUserPath
-    Find-OtherGita
+    # Your PATH is only changed when a person runs the setup.
+    if (-not $Update) { Set-GitaFirstInUserPath; Find-OtherGita }
     Update-SessionPath
     Add-ClaudeBinToPath
     $file = Get-OnboardingFile
@@ -730,6 +857,16 @@ function Install-ThoughtBoxDevSetup {
     Add-ClaudeBinToPath
     $code = $S.Code
     if ($code -ne 0) { Note "Gita stopped with exit code $code (see above)." }
+    if ($code -eq 0 -and $Update) {
+      # Onboarding checked the tools and repositories. A cancelled or expired GitHub sign-in
+      # needs a person: say so instead of opening a browser.
+      $r = Capture { & $gita doctor }
+      if ($r.Code -ne 0) {
+        Warn "Gita's check found a problem, most likely a GitHub sign-in that needs renewing."
+        Send-Notice 'ThoughtBox setup' 'A GitHub sign-in needs attention. Run the dev-setup command to fix it.'
+        Record "Gita's check found a problem. Run the dev-setup install command to renew the sign-in."
+      }
+    } elseif ($code -eq 0 -and $Action -eq 'install') { Offer-UpdateTask }
 
     # ---- Optional: Figma for frontend work (after a finished onboarding) ----
     if ($code -eq 0 -and (Want-Figma)) {
@@ -750,8 +887,10 @@ function Install-ThoughtBoxDevSetup {
         Warn 'Everything else is set up. Fix that and run the setup again with TB_FIGMA=1.'
       }
     }
+    }
   } catch {
     $code = 1
+    if ($Update) { Send-Notice 'ThoughtBox setup' 'The automatic update failed. See ~\.thoughtbox-update.log' }
     Write-Host ''
     $msg = $_.Exception.Message
     if ($msg -notlike 'Setup stopped:*') { $msg = "Setup stopped: $msg" }   # an unexpected error
@@ -759,6 +898,7 @@ function Install-ThoughtBoxDevSetup {
     Note 'Fix the problem above and run the same command again.'
   } finally {
     if ($S.Tmp) { Remove-Item -LiteralPath $S.Tmp -Recurse -Force -ErrorAction SilentlyContinue }
+    if ($S.Lock) { Remove-Item -LiteralPath $S.Lock -Recurse -Force -ErrorAction SilentlyContinue }
   }
   if ($code -ne 0) {
     # No "exit" here: under "irm | iex" it would close the developer's terminal.
