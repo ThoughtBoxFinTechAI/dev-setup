@@ -20,6 +20,12 @@ we did, with diagrams.
 | `fix/main-into-develop` | [unreleased/fix-main-into-develop.md](unreleased/fix-main-into-develop.md) |
 | `fix/checkout-v7` | [unreleased/fix-checkout-v7.md](unreleased/fix-checkout-v7.md) |
 
+## v0.3.0 – Alpha
+
+| Document | Link |
+|---|---|
+| Change Request: Full-screen setup TUI | [v0.3.0/alpha/v0.3.0 - Change Request (Full-screen setup TUI).md](v0.3.0/alpha/v0.3.0%20-%20Change%20Request%20(Full-screen%20setup%20TUI).md) |
+
 ## v0.2.0 – Alpha
 
 | Document | File |

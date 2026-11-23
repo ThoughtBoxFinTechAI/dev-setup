@@ -1,0 +1,37 @@
+# Builds the setup TUI for each system when a tag like tui-v0.3.0 is pushed, and
+# publishes the files with a SHA256SUMS list. The installers pin these checksums.
+name: Release setup TUI
+
+on:
+  push:
+    tags: ['tui-v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Test
+        working-directory: tui
+        run: go vet ./... && go test ./...
+      - name: Build
+        working-directory: tui
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          v="${GITHUB_REF_NAME#tui-v}"
+          mkdir -p ../dist
+          build() { GOOS=$1 GOARCH=$2 go build -trimpath -ldflags "-s -w -X main.version=$v" -o "../dist/$3" ./cmd/tb-setup; }
+          build darwin arm64 tb-setup-darwin-arm64
+          build darwin amd64 tb-setup-darwin-amd64
+          build linux amd64 tb-setup-linux-amd64
+          build linux arm64 tb-setup-linux-arm64
+          build windows amd64 tb-setup-windows-amd64.exe
+          cd ../dist && sha256sum tb-setup-* > SHA256SUMS
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --title "Setup TUI ${GITHUB_REF_NAME#tui-v}" --notes "Full-screen setup. Check the files against SHA256SUMS."
