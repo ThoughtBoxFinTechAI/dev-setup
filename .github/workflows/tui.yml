@@ -1,0 +1,39 @@
+# Builds and tests the full-screen setup (tui/) on all three systems.
+name: Test setup TUI
+
+on:
+  pull_request:
+    paths: ['tui/**', '.github/workflows/tui.yml']
+  push:
+    branches: [main]
+    paths: ['tui/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: tui
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - run: go version
+      - run: go vet ./...
+      - run: go test ./...
+      - run: go build -o tb-setup-ci ./cmd/tb-setup
+
+  vulncheck:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tui
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
