@@ -125,6 +125,42 @@ Troubleshooting:
 - **"The Figma bridge is running"** during an update: close Claude Code and any other AI
   tool using the bridge, then run the setup again.
 
+## Keeping a computer up to date (daily update)
+
+At the end of a normal setup the script asks *"Keep this computer up to date automatically?"*
+(default **yes**). It then runs a quiet update every day: launchd on macOS, a systemd user timer
+(or cron) on Linux, Task Scheduler on Windows. A run missed while the computer was off happens
+when it is next on (not with cron).
+
+Each update downloads the current `install.sh` / `install.ps1` from `main` and runs it in
+**update mode**:
+
+- no questions, and it never starts a browser sign-in;
+- updates Gita to the version pinned in the script, re-runs `gita onboard` (tools,
+  claude-standards and its setup, which also repairs a stale plugin), and keeps Figma current
+  if you set it up;
+- leaves Gita alone while the Gita app (or Claude Code's Gita connection) is running, and tries
+  again next time;
+- does not touch your shell startup files or PATH;
+- if `gita doctor` finds a problem, usually a GitHub sign-in that stopped working, it shows a
+  desktop notification and says so in the log. Run the normal setup command to renew the sign-in.
+
+The log is `~/.thoughtbox-update.log` (`%USERPROFILE%\.thoughtbox-update.log` on Windows), with
+this run only. Only one update runs at a time.
+
+| Do this | macOS / Linux | Windows (PowerShell) |
+|---|---|---|
+| Update now, quietly | `curl -fsSL <install.sh URL> \| bash -s -- --update` | `$env:TB_UPDATE = '1'` then the install command |
+| Turn the daily update on | `... \| bash -s -- --schedule` | `$env:TB_SCHEDULE = '1'` then the install command |
+| Turn it off | `... \| bash -s -- --unschedule` | `$env:TB_UNSCHEDULE = '1'` then the install command |
+
+`TB_AUTO_UPDATE=1` or `0` answers the question at the end of a normal setup up front.
+
+**Security note.** A daily update runs whatever is on `main` of this repository, on every
+machine that turned it on. `main` is protected by the team's rules (pull requests that a person
+reviews and merges), not by GitHub. Keep it that way, and keep the pinned checksums in the scripts
+as the way new Gita versions reach people.
+
 ## Signing in with a classic token (optional)
 
 By default Gita signs you in with a code you enter on github.com. GitHub keeps only the 10
@@ -162,6 +198,8 @@ Set these environment variables before running:
 | `TB_CLEAN=1` | Remove old GitHub sign-ins without asking. Without a terminal and without this, nothing is removed. |
 | `TB_LOG` | Where to write the log (default `~/.thoughtbox-setup.log`). |
 | `TB_FIGMA=1`, `TB_FIGMA=0` | Set up Figma for frontend work, or skip it, without being asked. Unset: you're asked; with no terminal (CI, piped without one) it's skipped. |
+| `TB_UPDATE=1`, `TB_SCHEDULE=1`, `TB_UNSCHEDULE=1` | Update quietly now, turn the daily update on, or turn it off (see above). On macOS/Linux you can use `--update`, `--schedule`, `--unschedule` instead. |
+| `TB_AUTO_UPDATE=1`, `TB_AUTO_UPDATE=0` | Turn the daily update on, or leave it alone, without being asked. Unset: you're asked at the end of a normal setup; with no terminal it is not set up. |
 | `TB_TOKEN_SIGNIN=1`, `TB_TOKEN_SIGNIN=0` | Offer a classic-token sign-in (see above), or never offer it, without being asked. Unset: you're asked; with no terminal it is not offered. The token itself is only ever typed into the hidden prompt. |
 | `TB_TOKEN_DAYS=30`, `90`, `180`, `365`, `none` | How long a classic token should last, without showing the menu. Unset: the menu, with 1 year selected. |
 | `TB_SKIP_SIGNIN=1`, `TB_SKIP_STANDARDS=1` | Skip GitHub sign-in, or claude-standards and its setup (for testing). |
