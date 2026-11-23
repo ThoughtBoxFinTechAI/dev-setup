@@ -16,9 +16,16 @@
 #   TB_CLEAN=1          remove old GitHub sign-ins and settings without asking
 #   TB_LOG=<path>       write the log here instead of ~/.thoughtbox-setup.log
 #   TB_SKIP_SIGNIN=1    don't sign in to GitHub (testing)
+#   TB_TOKEN_SIGNIN=1 / TB_TOKEN_SIGNIN=0  offer to sign in with a classic token (hidden
+#                       prompt) instead of the browser code, or never offer it
+#                       (default: ask; no terminal = never offer). Tokens are never
+#                       read from the environment or the command line.
+#   TB_TOKEN_DAYS=30|90|180|365|none  how long a classic token should last, without
+#                       showing the menu (default: menu, 1 year preselected)
 #   TB_SKIP_STANDARDS=1 skip claude-standards and its setup (testing)
 #   TB_GITA_ARCHIVE=<path>     install Gita from a local archive (testing, no checksum)
 #   TB_ONBOARDING_FILE=<path>  use a local onboarding file (testing, no checksum)
+#   TB_TTY=<path>      read answers from this file instead of the terminal (testing)
 #   TB_FIGMA=1 / TB_FIGMA=0  set up the Figma MCP Bridge for frontend work (macOS),
 #                       or skip it, without being asked (default: ask; no terminal = skip)
 
@@ -48,7 +55,7 @@ main() {
   export PATH="$GITA_HOME/bin:$HOME/.local/bin:$PATH"
 
   # Gita asks its questions on the terminal, not on the piped script.
-  local TTY=/dev/tty
+  local TTY=${TB_TTY:-/dev/tty}   # TB_TTY: a file to read answers from (testing)
   if ! { : <"$TTY"; } 2>/dev/null; then TTY=/dev/null; fi
 
   start_log
@@ -124,14 +131,15 @@ main() {
   echo >&2
   local rc=0
   TB_GITA_RAN=1
-  # Gita only asks questions when both its input and output are a terminal, so
-  # with a terminal it writes straight to it (the log can't hold that part).
-  if [ "$TTY" != /dev/null ] && [ -t 3 ]; then
-    note "(Gita's own output is shown in the terminal only, so it can ask you questions.)"
-    "$gita" "${args[@]}" <"$TTY" >&3 2>&4 || rc=$?
-  else
-    "$gita" "${args[@]}" <"$TTY" || rc=$?
+  # Optional: classic tokens instead of the browser code. Gita first creates the
+  # profiles (no sign-in, no repositories); the tokens are then saved with
+  # "gita sign-in --with-token"; the full run below keeps a sign-in that works
+  # and only asks for the browser code for accounts that have none.
+  if want_token_signin; then
+    token_signin "$gita" "$file" "${args[@]:2}" || rc=$?
+    [ "$rc" = 0 ] || return "$rc"
   fi
+  run_gita "$gita" "${args[@]}" || rc=$?
   [ "$rc" = 0 ] || return "$rc"
 
   # ---- 4. Optional: Figma for frontend work ----
@@ -491,6 +499,217 @@ check_other_gita() {
     if [ "$DRY" = 1 ]; then record "Another gita at $p would be behind ~/.gita/bin (dry run)"
     else record "Another gita at $p is now behind ~/.gita/bin"; fi
   done
+}
+
+# ---------------------------------------------------------------- classic token sign-in (optional)
+
+# run_gita <gita> <args...>: Gita only asks questions when both its input and
+# output are a terminal, so with a terminal it writes straight to it (the log
+# can't hold that part).
+run_gita() {
+  local g=$1; shift
+  if [ "$TTY" != /dev/null ] && [ -t 3 ]; then
+    note "(Gita's own output is shown in the terminal only, so it can ask you questions.)"
+    "$g" "$@" <"$TTY" >&3 2>&4
+  else
+    "$g" "$@" <"$TTY"
+  fi
+}
+
+# TB_TOKEN_SIGNIN answers up front; otherwise ask. No terminal, a dry run or
+# TB_SKIP_SIGNIN=1 means no.
+want_token_signin() {
+  local answer
+  [ "$DRY" != 1 ] || { [ "${TB_TOKEN_SIGNIN:-}" != 1 ] || note "[dry run] would sign in with classic tokens"; return 1; }
+  [ "${TB_SKIP_SIGNIN:-0}" != 1 ] || return 1
+  case "${TB_TOKEN_SIGNIN:-}" in
+    1) return 0 ;;
+    0) return 1 ;;
+    "") ;;
+    *) warn "TB_TOKEN_SIGNIN must be 1 or 0 (it is \"$TB_TOKEN_SIGNIN\"), so the token option is not offered."; return 1 ;;
+  esac
+  [ "$TTY" != /dev/null ] || return 1
+  printf 'Sign in to GitHub with a classic token instead of the browser code? [y/N]: ' >&2
+  IFS= read -r answer <"$TTY" || true
+  answer=$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+  [ "$answer" = y ] || [ "$answer" = yes ]
+}
+
+# The scopes Gita needs, as GitHub's "new classic token" page takes them.
+TB_TOKEN_URL="https://github.com/settings/tokens/new?description=Gita&scopes=repo,workflow,read:user,user:email,write:public_key,read:org"
+
+# json_values <key> < file: the string values of a key, one per line. The
+# onboarding file is pinned by checksum and has one key per line.
+json_values() {
+  grep -o "\"$1\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" | sed 's/^[^:]*:[[:space:]]*"\(.*\)"$/\1/'
+}
+
+# menu <title> <default index> <label>...: a small arrow-key menu on the terminal
+# (up/down or k/j, a digit to jump, Enter to accept). Sets MENU_CHOICE to the
+# chosen index (1-based). Without a real terminal (TB_TTY, tests) it reads a
+# line: a digit, or Enter for the default.
+menu() {
+  local title=$1 sel=$2 i k rest n; shift 2
+  local items=("$@"); n=${#items[@]}
+  printf '%s\n' "$title" >&2
+  if [ ! -c "$TTY" ]; then
+    for i in $(seq 1 "$n"); do printf '  %s) %s\n' "$i" "${items[$((i - 1))]}" >&2; done
+    printf 'Choose 1-%s [%s]: ' "$n" "$sel" >&2
+    IFS= read -r k <"$TTY" || true
+    k=$(printf '%s' "$k" | tr -d '[:space:]')
+    case $k in [1-9]) [ "$k" -le "$n" ] && sel=$k ;; esac
+    MENU_CHOICE=$sel; return 0
+  fi
+  _menu_draw() {
+    local j
+    for j in $(seq 1 "$n"); do
+      if [ "$j" = "$sel" ]; then printf '\033[2K  \033[36m> %s\033[0m\n' "${items[$((j - 1))]}" >&2
+      else printf '\033[2K    %s\n' "${items[$((j - 1))]}" >&2; fi
+    done
+  }
+  # Keys that arrive between two reads must not be echoed onto the menu.
+  local saved
+  saved=$(stty -g <"$TTY" 2>/dev/null) || saved=""
+  [ -z "$saved" ] || stty -echo <"$TTY" 2>/dev/null || true
+  printf '  (arrow keys to move, Enter to choose)\n' >&2
+  _menu_draw
+  while :; do
+    IFS= read -rsn1 k <"$TTY" || break
+    case $k in
+      "") break ;;
+      $'\033') IFS= read -rsn2 -t 1 rest <"$TTY" || true
+        case $rest in '[A') [ "$sel" -gt 1 ] && sel=$((sel - 1)) ;; '[B') [ "$sel" -lt "$n" ] && sel=$((sel + 1)) ;; esac ;;
+      k) [ "$sel" -gt 1 ] && sel=$((sel - 1)) ;;
+      j) [ "$sel" -lt "$n" ] && sel=$((sel + 1)) ;;
+      [1-9]) [ "$k" -le "$n" ] && sel=$k ;;
+    esac
+    printf '\033[%sA' "$n" >&2
+    _menu_draw
+  done
+  [ -z "$saved" ] || stty "$saved" <"$TTY" 2>/dev/null || true
+  MENU_CHOICE=$sel
+}
+
+# date_in_days <n>: the date n days from now, as YYYY-MM-DD (macOS or GNU date).
+date_in_days() { date -v+"$1"d +%Y-%m-%d 2>/dev/null || date -d "+$1 days" +%Y-%m-%d; }
+
+# days_between <YYYY-MM-DD> <YYYY-MM-DD>: whole days from the first to the second.
+days_between() {
+  local a b
+  a=$(date -j -f %Y-%m-%d "$1" +%s 2>/dev/null || date -d "$1" +%s) || return 1
+  b=$(date -j -f %Y-%m-%d "$2" +%s 2>/dev/null || date -d "$2" +%s) || return 1
+  echo $(((b - a) / 86400))
+}
+
+# choose_token_days: sets TOKEN_DAYS (a number, or "none"). TB_TOKEN_DAYS skips the menu.
+choose_token_days() {
+  case "${TB_TOKEN_DAYS:-}" in
+    30 | 90 | 180 | 365 | none) TOKEN_DAYS=$TB_TOKEN_DAYS; return 0 ;;
+    "") ;;
+    *) warn "TB_TOKEN_DAYS must be 30, 90, 180, 365 or none (it is \"$TB_TOKEN_DAYS\"); showing the menu." ;;
+  esac
+  menu "How long should the token last?" 4 \
+    "30 days" "90 days" "180 days" "1 year (recommended)" "No expiry (not recommended)"
+  case $MENU_CHOICE in 1) TOKEN_DAYS=30 ;; 2) TOKEN_DAYS=90 ;; 3) TOKEN_DAYS=180 ;; 5) TOKEN_DAYS=none ;; *) TOKEN_DAYS=365 ;; esac
+}
+
+# token_expiry <token>: prints the token's expiry as GitHub reports it
+# ("2027-11-23 00:00:00 UTC"), or "none". The token goes to curl on its stdin
+# (a config), never on the command line, where other users' ps could see it.
+token_expiry() {
+  has curl || return 1
+  local head
+  head=$(printf 'header = "Authorization: Bearer %s"\n' "$1" |
+    curl -sSI --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 60 -K - https://api.github.com/user 2>/dev/null |
+    tr -d '\r') || return 1
+  case $head in HTTP/*" 200"*) ;; *) return 1 ;; esac
+  printf '%s\n' "$head" | awk 'tolower($1) == "github-authentication-token-expiration:" { $1 = ""; print substr($0, 2); found = 1 } END { if (!found) print "none" }'
+}
+
+# report_token_expiry <token> <wanted YYYY-MM-DD or empty for none>: says when the
+# token expires and warns if that is not what was chosen.
+report_token_expiry() {
+  local actual day gap
+  actual=$(token_expiry "$1") || { note "Couldn't ask GitHub when this token expires."; return 0; }
+  if [ "$actual" = none ]; then
+    if [ -n "$2" ]; then warn "This token never expires, but you chose $2. Fine, or create a new one with an expiry."
+    else note "This token does not expire."; fi
+    return 0
+  fi
+  day=${actual%% *}
+  if [ -z "$2" ]; then warn "This token expires on $day, but you chose no expiry."; return 0; fi
+  gap=$(days_between "$day" "$2") || gap=0
+  if [ "$gap" -gt 3 ]; then
+    warn "This token expires on $day, sooner than the $2 you chose. Run the setup again before then, or create a longer one."
+  else
+    note "This token expires on $day. Run the setup again before then to renew it."
+  fi
+}
+
+# token_signin <gita> <onboarding file> [onboard options...]: creates the
+# profiles, then offers a hidden prompt for a classic token per account.
+token_signin() {
+  local g=$1 file=$2; shift 2
+  local labels domains n i label domain tok answer tries out rc=0
+  labels=$(json_values label <"$file")
+  domains=$(json_values emailDomain <"$file")
+  n=$(printf '%s\n' "$labels" | grep -c .)
+  if [ "$n" -eq 0 ] || [ "$n" -ne "$(printf '%s\n' "$domains" | grep -c .)" ]; then
+    warn "Couldn't read the accounts from the onboarding file, so tokens are not offered. Using the browser code."
+    return 0
+  fi
+  say "Preparing your Gita profiles"
+  run_gita "$g" onboard "$file" --skip-sign-in --skip-repos "$@" || rc=$?
+  [ "$rc" = 0 ] || return "$rc"
+
+  for i in $(seq 1 "$n"); do
+    label=$(printf '%s\n' "$labels" | sed -n "${i}p")
+    domain=$(printf '%s\n' "$domains" | sed -n "${i}p")
+    printf '\nUse a classic token for "%s" (your @%s account)? [y/N]: ' "$label" "$domain" >&2
+    IFS= read -r answer <"$TTY" || true
+    answer=$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+    [ "$answer" = y ] || [ "$answer" = yes ] || { note "Using the browser code for \"$label\"."; continue; }
+    choose_token_days
+    local want_date=""
+    note "Create a classic token while signed in to GitHub as that account (the scopes are ticked for you):"
+    note "  $TB_TOKEN_URL"
+    if [ "$TOKEN_DAYS" = none ]; then
+      note "Under Expiration, choose \"No expiration\"."
+    else
+      want_date=$(date_in_days "$TOKEN_DAYS")
+      note "Under Expiration, pick \"Custom\" and set $want_date ($TOKEN_DAYS days), or the closest choice."
+    fi
+    note "The token is saved in your system's key store, not on disk."
+    tries=0
+    while [ "$tries" -lt 3 ]; do
+      tries=$((tries + 1))
+      # Echo off before the prompt is shown, so even a fast paste is never displayed.
+      local saved_tty
+      saved_tty=$(stty -g <"$TTY" 2>/dev/null) || saved_tty=""
+      [ -z "$saved_tty" ] || stty -echo <"$TTY" 2>/dev/null || true
+      printf 'Paste the token (nothing shows while you type), or press Enter for the browser code: ' >&2
+      IFS= read -rs tok <"$TTY" || true
+      [ -z "$saved_tty" ] || stty "$saved_tty" <"$TTY" 2>/dev/null || true
+      printf '\n' >&2
+      tok=$(printf '%s' "$tok" | tr -d '[:space:]')
+      if [ -z "$tok" ]; then note "Using the browser code for \"$label\"."; break; fi
+      case $tok in
+        ghp_*) ;;
+        github_pat_*) warn "That is a fine-grained token. A classic token (ghp_...) is expected; fine-grained ones can miss scopes Gita needs." ;;
+        *) warn "That doesn't look like a GitHub token (a classic one starts with ghp_)."; tok=""; continue ;;
+      esac
+      # The token goes in through stdin: never on a command line or in the log.
+      out=$(printf '%s' "$tok" | "$g" sign-in --profile "$label" --with-token --force 2>&1) && rc=0 || rc=$?
+      printf '%s\n' "$out" | sed 's/^/    /' >&2
+      if [ "$rc" = 0 ]; then report_token_expiry "$tok" "$want_date"; tok=""; break; fi
+      tok=""
+      warn "GitHub didn't accept that token (see above)."
+      [ "$tries" -lt 3 ] || note "Giving up on a token for \"$label\"; the browser code is used instead."
+    done
+    tok=""
+  done
+  rc=0
+  return 0
 }
 
 # ---------------------------------------------------------------- Figma (optional, see the README)

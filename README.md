@@ -125,6 +125,32 @@ Troubleshooting:
 - **"The Figma bridge is running"** during an update: close Claude Code and any other AI
   tool using the bridge, then run the setup again.
 
+## Signing in with a classic token (optional)
+
+By default Gita signs you in with a code you enter on github.com. GitHub keeps only the 10
+newest browser sign-ins per account for one app, so signing in again on other computers can
+cancel an older one, and Gita then asks you to sign in again. A **classic token** does not
+have that limit and lasts as long as you choose.
+
+When the setup runs in a terminal it asks *"Sign in to GitHub with a classic token instead of
+the browser code?"* Answer **y** and, for each account:
+
+1. Choose how long the token should last with the arrow keys: 30 days, 90 days, 180 days,
+   **1 year** (the default) or no expiry. The setup prints the exact expiry date to pick.
+2. Open the link it prints. The scopes Gita needs are already ticked. Create the token as that
+   GitHub account, and under *Expiration* pick **Custom** and the date shown. GitHub's token
+   page cannot be told the expiry for you, so this part is by hand.
+3. Paste the token. Nothing shows while you type. Press Enter alone to use the browser code.
+
+The token goes to Gita on its standard input and is kept in your system's key store (macOS
+Keychain, Windows Credential Manager, or `secret-tool` on Linux). It is never put on a command
+line, in an environment variable or in the log. After saving it, the setup asks GitHub when it
+expires and warns if that is sooner than you chose. Fine-grained tokens are accepted with a
+warning, since they can lack scopes Gita needs.
+
+When a token runs out, `gita doctor` reports the sign-in as stopped. Run the setup again and
+choose a token again to renew it.
+
 ## Options
 
 Set these environment variables before running:
@@ -136,6 +162,8 @@ Set these environment variables before running:
 | `TB_CLEAN=1` | Remove old GitHub sign-ins without asking. Without a terminal and without this, nothing is removed. |
 | `TB_LOG` | Where to write the log (default `~/.thoughtbox-setup.log`). |
 | `TB_FIGMA=1`, `TB_FIGMA=0` | Set up Figma for frontend work, or skip it, without being asked. Unset: you're asked; with no terminal (CI, piped without one) it's skipped. |
+| `TB_TOKEN_SIGNIN=1`, `TB_TOKEN_SIGNIN=0` | Offer a classic-token sign-in (see above), or never offer it, without being asked. Unset: you're asked; with no terminal it is not offered. The token itself is only ever typed into the hidden prompt. |
+| `TB_TOKEN_DAYS=30`, `90`, `180`, `365`, `none` | How long a classic token should last, without showing the menu. Unset: the menu, with 1 year selected. |
 | `TB_SKIP_SIGNIN=1`, `TB_SKIP_STANDARDS=1` | Skip GitHub sign-in, or claude-standards and its setup (for testing). |
 | `TB_GITA_ZIP` (Windows), `TB_GITA_ARCHIVE` (macOS/Linux) | Install Gita from a local file instead of the release. No checksum check; for testing builds only. |
 | `TB_ONBOARDING_FILE` | Use a local onboarding file instead of the one in this repo. No checksum check; for testing only. |

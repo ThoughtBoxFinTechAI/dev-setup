@@ -15,6 +15,12 @@
 #   TB_CLEAN=1          remove old GitHub sign-ins and settings without asking
 #   TB_LOG=<path>       write the log here instead of ~\.thoughtbox-setup.log
 #   TB_SKIP_SIGNIN=1    don't sign in to GitHub (testing)
+#   TB_TOKEN_SIGNIN=1 / TB_TOKEN_SIGNIN=0  offer to sign in with a classic token (hidden
+#                       prompt) instead of the browser code, or never offer it
+#                       (default: ask; no terminal = never offer). Tokens are never
+#                       read from the environment or the command line.
+#   TB_TOKEN_DAYS=30|90|180|365|none  how long a classic token should last, without
+#                       showing the menu (default: menu, 1 year preselected)
 #   TB_SKIP_STANDARDS=1 skip claude-standards and its setup (testing)
 #   TB_GITA_ZIP=<path>         install Gita from a local zip (testing, no checksum)
 #   TB_ONBOARDING_FILE=<path>  use a local onboarding file (testing, no checksum)
@@ -381,7 +387,7 @@ function Install-ThoughtBoxDevSetup {
   # Runs "gita onboard" and keeps its exit code in $S.Code. Gita only asks
   # questions when its input and output are a console, so with one it writes
   # straight to it (this function's output must not be captured for that).
-  function Invoke-Onboard([string]$Gita, [string]$File) {
+  function Invoke-Onboard([string]$Gita, [string]$File, [string[]]$Extra = @()) {
     $ga = @('onboard', $File)
     if ($env:TB_NAME) { $ga += @('--name', $env:TB_NAME) }
     if ($env:TB_EMAIL_IO) { $ga += @('--email', "io=$env:TB_EMAIL_IO") }
@@ -390,6 +396,7 @@ function Install-ThoughtBoxDevSetup {
     if ($env:TB_CLEAN -eq '1') { $ga += '--clean' }
     if ($env:TB_SKIP_SIGNIN -eq '1') { $ga += '--skip-sign-in' }
     if ($env:TB_SKIP_STANDARDS -eq '1') { $ga += '--skip-repos' }
+    foreach ($e in $Extra) { if ($ga -notcontains $e) { $ga += $e } }
     Write-Host ''
     $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
     # Under PowerShell 7, PSModulePath lists PowerShell 7's own modules first. Gita runs
@@ -416,6 +423,138 @@ function Install-ThoughtBoxDevSetup {
   function Has([string]$Cmd) { [bool](Get-Command $Cmd -ErrorAction SilentlyContinue) }
 
   # TB_FIGMA answers up front; otherwise ask. No console to ask in means no.
+  # ---------------------------------------------------- classic token sign-in (optional)
+
+  # The scopes Gita needs, as GitHub's "new classic token" page takes them.
+  $TokenUrl = 'https://github.com/settings/tokens/new?description=Gita&scopes=repo,workflow,read:user,user:email,write:public_key,read:org'
+
+  # TB_TOKEN_SIGNIN answers up front; otherwise ask. No console, a dry run or
+  # TB_SKIP_SIGNIN=1 means no.
+  function Want-TokenSignIn {
+    if ($Dry) { if ($env:TB_TOKEN_SIGNIN -eq '1') { Note '[dry run] would sign in with classic tokens' }; return $false }
+    if ($env:TB_SKIP_SIGNIN -eq '1') { return $false }
+    if ($env:TB_TOKEN_SIGNIN -eq '1') { return $Interactive }
+    if ($env:TB_TOKEN_SIGNIN -eq '0') { return $false }
+    if ($env:TB_TOKEN_SIGNIN) { Warn "TB_TOKEN_SIGNIN must be 1 or 0 (it is `"$env:TB_TOKEN_SIGNIN`"), so the token option is not offered."; return $false }
+    if (-not $Interactive) { return $false }
+    $answer = "$(Read-Host 'Sign in to GitHub with a classic token instead of the browser code? [y/N]')".Trim().ToLowerInvariant()
+    return ($answer -eq 'y' -or $answer -eq 'yes')
+  }
+
+  # An arrow-key menu on the console (up/down, j/k, a digit to jump, Enter to accept).
+  # Returns the chosen index, 1-based.
+  function Read-Menu([string]$Title, [int]$Default, [string[]]$Items) {
+    $n = $Items.Count; $sel = $Default
+    Write-Host $Title
+    Write-Host '  (arrow keys to move, Enter to choose)'
+    # Reserve the lines first, so the menu can't scroll away from $top.
+    for ($j = 1; $j -le $n; $j++) { Write-Host '' }
+    $top = [Console]::CursorTop - $n
+    $width = [Math]::Max(20, [Console]::WindowWidth - 1)
+    $draw = {
+      [Console]::SetCursorPosition(0, $top)
+      for ($j = 1; $j -le $n; $j++) {
+        if ($j -eq $sel) { Write-Host ("  > $($Items[$j - 1])").PadRight($width) -ForegroundColor Cyan }
+        else { Write-Host ("    $($Items[$j - 1])").PadRight($width) }
+      }
+    }
+    & $draw
+    while ($true) {
+      $press = [Console]::ReadKey($true)
+      if ($press.Key -eq 'Enter') { return $sel }
+      elseif ($press.Key -eq 'UpArrow' -or $press.KeyChar -eq 'k') { if ($sel -gt 1) { $sel-- } }
+      elseif ($press.Key -eq 'DownArrow' -or $press.KeyChar -eq 'j') { if ($sel -lt $n) { $sel++ } }
+      elseif ($press.KeyChar -match '^[1-9]$' -and [int][string]$press.KeyChar -le $n) { $sel = [int][string]$press.KeyChar }
+      & $draw
+    }
+  }
+
+  # How long the token should last: a number of days, or 'none'. TB_TOKEN_DAYS skips the menu.
+  function Select-TokenDays {
+    if ($env:TB_TOKEN_DAYS -match '^(30|90|180|365|none)$') { return $env:TB_TOKEN_DAYS }
+    if ($env:TB_TOKEN_DAYS) { Warn "TB_TOKEN_DAYS must be 30, 90, 180, 365 or none (it is `"$env:TB_TOKEN_DAYS`"); showing the menu." }
+    $i = Read-Menu 'How long should the token last?' 4 @('30 days', '90 days', '180 days', '1 year (recommended)', 'No expiry (not recommended)')
+    switch ($i) { 1 { return '30' } 2 { return '90' } 3 { return '180' } 5 { return 'none' } default { return '365' } }
+  }
+
+  # When GitHub says the token expires ("2027-11-23 00:00:00 UTC"), or 'none'; $null if
+  # GitHub can't be asked. The token goes in a header in this process, not on a command line.
+  function Get-TokenExpiry([string]$Token) {
+    try {
+      $r = Invoke-WebRequest -Uri 'https://api.github.com/user' -Method Head -UseBasicParsing `
+        -Headers @{ Authorization = "Bearer $Token" } -TimeoutSec 30
+      $name = @($r.Headers.Keys | Where-Object { $_ -ieq 'github-authentication-token-expiration' }) | Select-Object -First 1
+      if (-not $name) { return 'none' }
+      return "$(@($r.Headers[$name])[0])"
+    } catch { return $null }
+  }
+
+  # Says when the token expires and warns if that is not what was chosen.
+  function Show-TokenExpiry([string]$Token, [string]$WantDate) {
+    $actual = Get-TokenExpiry $Token
+    if ($null -eq $actual) { Note "Couldn't ask GitHub when this token expires."; return }
+    if ($actual -eq 'none') {
+      if ($WantDate) { Warn "This token never expires, but you chose $WantDate. Fine, or create a new one with an expiry." }
+      else { Note 'This token does not expire.' }
+      return
+    }
+    $day = ($actual -split ' ')[0]
+    if (-not $WantDate) { Warn "This token expires on $day, but you chose no expiry."; return }
+    $gap = ([datetime]::Parse($WantDate) - [datetime]::Parse($day)).Days
+    if ($gap -gt 3) { Warn "This token expires on $day, sooner than the $WantDate you chose. Run the setup again before then, or create a longer one." }
+    else { Note "This token expires on $day. Run the setup again before then to renew it." }
+  }
+
+  # Creates the profiles (no sign-in, no repositories), then offers a hidden prompt for
+  # a classic token per account. The full run that follows keeps a sign-in that works
+  # and only asks for the browser code for accounts that have none.
+  function Invoke-TokenSignIn([string]$Gita, [string]$File) {
+    $accounts = @()
+    try { $accounts = @((Get-Content -Raw -LiteralPath $File | ConvertFrom-Json).accounts) } catch { }
+    $accounts = @($accounts | Where-Object { $_ -and $_.label -and $_.emailDomain })
+    if ($accounts.Count -eq 0) {
+      Warn "Couldn't read the accounts from the onboarding file, so tokens are not offered. Using the browser code."
+      return
+    }
+    Say 'Preparing your Gita profiles'
+    Invoke-Onboard $Gita $File @('--skip-sign-in', '--skip-repos')
+    if ($S.Code -ne 0) { return }
+
+    foreach ($a in $accounts) {
+      $label = [string]$a.label
+      Write-Host ''
+      if (-not (Ask-YN "Use a classic token for `"$label`" (your @$($a.emailDomain) account)?" $false)) {
+        Note "Using the browser code for `"$label`"."; continue
+      }
+      $days = Select-TokenDays
+      $wantDate = ''
+      Note 'Create a classic token while signed in to GitHub as that account (the scopes are ticked for you):'
+      Note "  $TokenUrl"
+      if ($days -eq 'none') { Note 'Under Expiration, choose "No expiration".' }
+      else {
+        $wantDate = (Get-Date).AddDays([int]$days).ToString('yyyy-MM-dd')
+        Note "Under Expiration, pick `"Custom`" and set $wantDate ($days days), or the closest choice."
+      }
+      Note 'The token is saved in Windows Credential Manager, not on disk.'
+      for ($try = 1; $try -le 3; $try++) {
+        $secure = Read-Host 'Paste the token (nothing shows while you type), or press Enter for the browser code' -AsSecureString
+        $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+        try { $tok = ([Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)).Trim() }
+        finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+        if (-not $tok) { Note "Using the browser code for `"$label`"."; break }
+        if ($tok -like 'github_pat_*') { Warn 'That is a fine-grained token. A classic token (ghp_...) is expected; fine-grained ones can miss scopes Gita needs.' }
+        elseif ($tok -notlike 'ghp_*') { Warn "That doesn't look like a GitHub token (a classic one starts with ghp_)."; $tok = ''; continue }
+        # The token goes in through stdin: never on a command line or in the log.
+        $r = Capture { $tok | & $Gita sign-in --profile $label --with-token --force }
+        ($r.Out -split "`n") | ForEach-Object { Write-Host "    $_" }
+        if ($r.Code -eq 0) { Show-TokenExpiry $tok $wantDate; $tok = ''; break }
+        $tok = ''
+        Warn "GitHub didn't accept that token (see above)."
+        if ($try -eq 3) { Note "Giving up on a token for `"$label`"; the browser code is used instead." }
+      }
+    }
+  }
+
   function Want-Figma {
     if ($env:TB_FIGMA -eq '1') { return $true }
     if ($env:TB_FIGMA -eq '0') { return $false }
@@ -585,7 +724,9 @@ function Install-ThoughtBoxDevSetup {
     Update-SessionPath
     Add-ClaudeBinToPath
     $file = Get-OnboardingFile
-    Invoke-Onboard $gita $file
+    # Optional: classic tokens instead of the browser code (see Invoke-TokenSignIn).
+    if (Want-TokenSignIn) { Invoke-TokenSignIn $gita $file }
+    if ($S.Code -eq 0) { Invoke-Onboard $gita $file }
     Add-ClaudeBinToPath
     $code = $S.Code
     if ($code -ne 0) { Note "Gita stopped with exit code $code (see above)." }
