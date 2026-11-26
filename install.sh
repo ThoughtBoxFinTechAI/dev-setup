@@ -35,12 +35,12 @@ main() {
 
   # ---- Pinned versions. The gita-bump workflow updates these lines. ----
   local GITA_REPO="naseebnaushad/gita"
-  local GITA_VERSION="1.2.0"
+  local GITA_VERSION="1.2.1"
   # Checksums: filled in by the gita-bump workflow PR.
-  local GITA_SHA256_MACOS="fd309d002a4cb8098b025147b148c82a15bf394b459a2ebd10a65ce0b08aa78a"   # SHA-256 of gita-macos.zip
-  local GITA_SHA256_LINUX="efebfac466515a00476117694ed2f9bc6aa0a0d4b5e345ce3315ae29a3ccc46c"   # SHA-256 of gita-linux-x64.tar.gz
+  local GITA_SHA256_MACOS="870b100be7b504a8989c285bacb688f6c7f2c054ff65dae3ff7a29dfa6158478"   # SHA-256 of gita-macos.zip
+  local GITA_SHA256_LINUX="cc77dde757bb0dc64a6de56ed8e44810e7bf6ffc2d4480acbdbcdd43fef8e9ec"   # SHA-256 of gita-linux-x64.tar.gz
   # Empty while the pinned Gita release has no arm64 Linux build.
-  local GITA_SHA256_LINUX_ARM64=""   # SHA-256 of gita-linux-arm64.tar.gz
+  local GITA_SHA256_LINUX_ARM64="6ad0f2d802dafa634de93a029f3e579f00f2d341eee991d2b2057fa67e3cb3de"   # SHA-256 of gita-linux-arm64.tar.gz
   local ONBOARDING_URL="https://raw.githubusercontent.com/ThoughtBoxFinTechAI/dev-setup/main/thoughtbox-onboarding.json"
   local ONBOARDING_SHA256="a723840dd6b09911fea6b1afa42cfe641c21deb161d0cb66e3e9e6bf1431a196"
 

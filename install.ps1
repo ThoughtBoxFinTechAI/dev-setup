@@ -37,10 +37,10 @@ function Install-ThoughtBoxDevSetup {
 
   # ---- Pinned versions. The gita-bump workflow updates these lines. ----
   $GitaRepo = 'naseebnaushad/gita'
-  $GitaVersion = '1.2.0'
+  $GitaVersion = '1.2.1'
   $GitaAsset = 'gita-windows-x64.zip'
   # Checksum: filled in by the gita-bump workflow PR.
-  $GitaSha256 = '33c9404f7ea3fa1a28486a7cb7b671521388b3ac19dfe94d63d7751d2cda1370'   # SHA-256 of $GitaAsset for $GitaVersion
+  $GitaSha256 = 'e83b8b5c69750b13dc63a6f1f9968c37e09c3890dc87e23d43bbc96dda9c73c5'   # SHA-256 of $GitaAsset for $GitaVersion
   $OnboardingUrl = 'https://raw.githubusercontent.com/ThoughtBoxFinTechAI/dev-setup/main/thoughtbox-onboarding.json'
   $OnboardingSha256 = 'a723840dd6b09911fea6b1afa42cfe641c21deb161d0cb66e3e9e6bf1431a196'
 
