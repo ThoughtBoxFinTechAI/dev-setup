@@ -39,6 +39,8 @@ main() {
   # Checksums: filled in by the gita-bump workflow PR.
   local GITA_SHA256_MACOS="fd309d002a4cb8098b025147b148c82a15bf394b459a2ebd10a65ce0b08aa78a"   # SHA-256 of gita-macos.zip
   local GITA_SHA256_LINUX="efebfac466515a00476117694ed2f9bc6aa0a0d4b5e345ce3315ae29a3ccc46c"   # SHA-256 of gita-linux-x64.tar.gz
+  # Empty while the pinned Gita release has no arm64 Linux build.
+  local GITA_SHA256_LINUX_ARM64=""   # SHA-256 of gita-linux-arm64.tar.gz
   local ONBOARDING_URL="https://raw.githubusercontent.com/ThoughtBoxFinTechAI/dev-setup/main/thoughtbox-onboarding.json"
   local ONBOARDING_SHA256="a723840dd6b09911fea6b1afa42cfe641c21deb161d0cb66e3e9e6bf1431a196"
 
@@ -73,8 +75,17 @@ main() {
       os=macos; asset="gita-macos.zip"; sha=$GITA_SHA256_MACOS
       app_dir="$HOME/Applications/gita.app"; cli_dir="$app_dir/Contents/Resources/cli" ;;
     Linux)
-      [ "$(uname -m)" = x86_64 ] || fail "Gita is only built for x86_64 Linux (this is $(uname -m))."
-      os=linux; asset="gita-linux-x64.tar.gz"; sha=$GITA_SHA256_LINUX
+      os=linux
+      case "$(uname -m)" in
+        x86_64) asset="gita-linux-x64.tar.gz"; sha=$GITA_SHA256_LINUX ;;
+        aarch64 | arm64)
+          asset="gita-linux-arm64.tar.gz"; sha=$GITA_SHA256_LINUX_ARM64
+          # A local archive (TB_GITA_ARCHIVE) needs no pinned checksum.
+          [ -n "$sha" ] || [ -n "${TB_GITA_ARCHIVE:-}" ] ||
+            fail "Gita $GITA_VERSION has no arm64 Linux build, so it can't be set up on this computer yet." \
+              "Run this again after an admin updates the pinned Gita version to a release with gita-linux-arm64.tar.gz." ;;
+        *) fail "Gita is only built for x86_64 and arm64 Linux (this is $(uname -m))." ;;
+      esac
       app_dir="$HOME/.local/share/gita"; cli_dir="$app_dir/cli" ;;
     *) fail "Unsupported system $(uname -s). On Windows, use install.ps1." ;;
   esac

@@ -18,7 +18,8 @@ it again any time: every step checks what is already there, keeps what works, an
 repairs what is broken.
 
 Macs need Apple silicon (M1 or later): the Gita command isn't built for Intel Macs yet.
-Linux needs x86_64. Windows needs Windows 10 or later.
+Linux needs x86_64 or arm64 (arm64 once the pinned Gita release includes an arm64 Linux
+build). Windows needs Windows 10 or later.
 
 ## How it works
 

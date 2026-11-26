@@ -83,6 +83,26 @@ jobs:
           TB_FIGMA=1 bash install.sh </dev/null 2>&1 | tee run4.log
           grep -q "isn't available on Linux" run4.log
 
+  linux-arm64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      # Until the pinned Gita release has an arm64 Linux build, the script
+      # must stop with a clear message; once it has one, it must install.
+      - name: Installs, or stops with a clear message
+        run: |
+          if grep -q '^ *local GITA_SHA256_LINUX_ARM64=""' install.sh; then
+            if bash install.sh </dev/null >out.log 2>&1; then cat out.log; exit 1; fi
+            cat out.log
+            grep -q "has no arm64 Linux build" out.log
+          else
+            TB_DRY_RUN=1 bash install.sh </dev/null
+            test ! -e "$HOME/.gita"
+            cat install.sh | bash
+            "$HOME/.gita/bin/gita" --version
+            "$HOME/.gita/bin/gita" profiles --json | grep -q ci@thoughtbox.one
+          fi
+
   macos-intel:
     runs-on: macos-15-intel
     steps:
