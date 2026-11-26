@@ -52,8 +52,13 @@ fi
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 assets=(gita-windows-x64.zip gita-macos.zip gita-linux-x64.tar.gz)
+# Optional: releases before arm64 Linux builds existed don't have it, and
+# install.sh then stops on arm64 Linux with a clear message.
+arm64=gita-linux-arm64.tar.gz
 gh release download "$tag" --repo "$REPO" --dir "$work" \
-  --pattern SHA256SUMS --pattern "${assets[0]}" --pattern "${assets[1]}" --pattern "${assets[2]}"
+  --pattern SHA256SUMS --pattern "${assets[0]}" --pattern "${assets[1]}" --pattern "${assets[2]}" \
+  --pattern "$arm64"
+[ -f "$work/$arm64" ] && assets+=("$arm64")
 
 [ -f "$work/SHA256SUMS" ] || fail "release $tag has no SHA256SUMS"
 sum_of() { awk -v f="$1" '$2 == f || $2 == "*"f {print $1}' "$work/SHA256SUMS" | head -1; }
@@ -66,6 +71,8 @@ for a in "${assets[@]}"; do
   [ "$got" = "$want" ] || fail "$a doesn't match SHA256SUMS (got $got, expected $want)"
   sha[$a]=$got
 done
+sha[$arm64]=${sha[$arm64]:-}
+[ -n "${sha[$arm64]}" ] || echo "Release $tag has no $arm64; arm64 Linux stays unsupported."
 
 # Start the Linux build once: a release whose command doesn't run is not pinned.
 mkdir -p "$work/linux"
@@ -79,6 +86,7 @@ sed -i \
   -e "s/^\( *local GITA_VERSION=\)\"[^\"]*\"/\1\"$latest\"/" \
   -e "s/^\( *local GITA_SHA256_MACOS=\)\"[^\"]*\"/\1\"${sha[gita-macos.zip]}\"/" \
   -e "s/^\( *local GITA_SHA256_LINUX=\)\"[^\"]*\"/\1\"${sha[gita-linux-x64.tar.gz]}\"/" \
+  -e "s/^\( *local GITA_SHA256_LINUX_ARM64=\)\"[^\"]*\"/\1\"${sha[$arm64]}\"/" \
   "$SH"
 sed -i \
   -e "s/^\( *\$GitaVersion *= *\)'[^']*'/\1'$latest'/" \
@@ -87,6 +95,7 @@ sed -i \
 
 grep -q "GITA_VERSION=\"$latest\"" "$SH" || fail "install.sh wasn't updated"
 grep -q "GITA_SHA256_LINUX=\"${sha[gita-linux-x64.tar.gz]}\"" "$SH" || fail "install.sh Linux checksum wasn't updated"
+grep -q "GITA_SHA256_LINUX_ARM64=\"${sha[$arm64]}\"" "$SH" || fail "install.sh arm64 Linux checksum wasn't updated"
 grep -q "GITA_SHA256_MACOS=\"${sha[gita-macos.zip]}\"" "$SH" || fail "install.sh macOS checksum wasn't updated"
 grep -q "\$GitaVersion *= *'$latest'" "$PS" || fail "install.ps1 wasn't updated"
 grep -q "\$GitaSha256 *= *'${sha[gita-windows-x64.zip]}'" "$PS" || fail "install.ps1 checksum wasn't updated"
